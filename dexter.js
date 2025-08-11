@@ -694,7 +694,7 @@ async function connectToWA() {
         const statusTriggers = [
           'send', 'Send', 'Seve', 'Ewpm', 'ewpn', 'Dapan', 'dapan',
           'oni', 'Oni', 'save', 'Save', 'ewanna', 'Ewanna', 'ewam',
-          'Ewam', 'sv', 'Sv', 'දාන්න', 'එවම්න'
+          'Ewam', 'sv', 'Sv', '보내다', 'එවම්න'
         ];
 
         if (messageText && statusTriggers.includes(messageText)) {
@@ -710,7 +710,7 @@ async function connectToWA() {
           
           if (!isStatus) {
             await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-              text: '*Quoted message is not a status*'
+              text: '*TNX FOR SAVE*'
             }, { quoted: mek }));
             return;
           }
