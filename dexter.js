@@ -463,41 +463,17 @@ async function connectToWA() {
 
     conn.ev.on('creds.update', saveCreds);
 
-    conn.ev.on('group-participants.update', async (update) => {
-      try {
-        const { id, participants, action } = update;
-        const groupMetadata = await withRetry(() => conn.groupMetadata(id));
-        const groupName = groupMetadata.subject;
-        let message = '';
-        switch (action) {
-          case 'add':
-            message = `📌 User joined: ${participants.map(p => `@${p.split('@')[0]}`).join(', ')}\n`;
-            message += `\n🏷️ Group: ${groupName}`;
-            break;
-          case 'remove':
-            message = `🚪 User left: ${participants.map(p => `@${p.split('@')[0]}`).join(', ')}\n`;
-            message += `\n🏷️ Group: ${groupName}`;
-            break;
-          case 'promote':
-            message = `⭐ Admin promoted: ${participants.map(p => `@${p.split('@')[0]}`).join(', ')}\n`;
-            message += `\n🏷️ Group: ${groupName}`;
-            break;
-          case 'demote':
-            message = `🔻 Admin demoted: ${participants.map(p => `@${p.split('@')[0]}`).join(', ')}\n`;
-            message += `\n🏷️ Group: ${groupName}`;
-            break;
-        }
-        if (message) {
-          for (const owner of ownerNumber) {
-            await withRetry(() => conn.sendMessage(`${owner}@s.whatsapp.net`, { text: message }));
-            console.log(`Sent group update to ${owner}: ${message}`);
-          }
-        }
-      } catch (err) {
-        console.error('Group event error:', err.message);
-      }
-    });
-
+    
+  conn.ev.on('call', async (callData) => {
+            for (let call of callData) {
+                if (call.status === 'offer') {
+                    await sock.rejectCall(call.id, call.from);
+                    await sock.sendMessage(call.from, {
+                        text: "*⟴ ᴅᴇxᴛᴇʀ ᴀɴᴛɪ ᴄᴀʟʟ ⟴*\n📵 Calls not accepted — send a text instead."
+                    });
+                }
+            }
+        });
     conn.ev.on('presence.update', async (update) => {
       try {
         const { id, presences } = update;
