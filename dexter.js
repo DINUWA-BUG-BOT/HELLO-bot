@@ -737,114 +737,112 @@ async function connectToWA() {
         }
 
         // Auto-reply logic
-        if (
-          messageText &&
-          !messageText.startsWith('.') &&
-          !mek.key.fromMe &&
-          senderJid !== restrictedNumber &&
-          mek.key.remoteJid !== restrictedNumber
-        ) {
-          for (const rule of replyRules.rules) {
-            let isMatch = false;
-            if (rule.pattern) {
-              try {
-                const regex = new RegExp(rule.pattern, 'i');
-                isMatch = regex.test(messageText);
-              } catch (err) {
-                console.error(`Invalid regex pattern in rule "${rule.trigger}": ${err.message}`);
-                isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
-              }
-            } else {
-              isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
-            }
+        // Auto-reply logic
+if (
+  messageText &&
+  !messageText.startsWith('.') &&
+  !mek.key.fromMe &&
+  senderJid !== restrictedNumber &&
+  mek.key.remoteJid !== restrictedNumber
+) {
+  for (const rule of replyRules.rules) {
+    let isMatch = false;
+    if (rule.pattern) {
+      try {
+        const regex = new RegExp(rule.pattern, 'i');
+        isMatch = regex.test(messageText);
+      } catch (err) {
+        console.error(`Invalid regex pattern in rule "${rule.trigger}": ${err.message}`);
+        isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
+      }
+    } else {
+      isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
+    }
 
-            if (isMatch) {
-              autoReplySent = true;
-              await pool.query(
-                `UPDATE messages SET auto_reply_sent = TRUE WHERE message_id = $1`,
-                [mek.key.id]
-              );
-              for (const response of rule.response) {
-                if (response.delay) {
-                  await new Promise(resolve => setTimeout(resolve, response.delay));
-                }
-                const contextInfo = {
-                  quotedMessage: mek.message,
-                  forwardingScore: 999,
-                  isForwarded: true,
-                  forwardedNewsletterMessageInfo: {
-                    newsletterJid: '120363286758767913@newsletter',
-                    newsletterName: 'JOIN CHANNEL 👋',
-                    serverMessageId: 143,
-                  },
-                };
-                let content = response.content;
-                let caption = response.caption;
-                let url = response.url;
-                if (content) {
-                  content = content.replace('${
-
-pushname}', pushName).replace('${userid}', userId).replace('${senderdpurl}', senderDpUrl);
-                }
-                if (caption) {
-                  caption = caption.replace('${pushname}', pushName).replace('${userid}', userId).replace('${senderdpurl}', senderDpUrl);
-                }
-                if (url) {
-                  url = url.replace('${pushname}', pushName).replace('${userid}', userId).replace('${senderdpurl}', senderDpUrl);
-                }
-                switch (response.type) {
-                  case 'text':
-                    await withRetry(() =>
-                      conn.sendMessage(mek.key.remoteJid, {
-                        text: content,
-                        contextInfo,
-                      }, { quoted: mek })
-                    );
-                    break;
-                  case 'image':
-                    const imageBuffer = await fetchMedia(url);
-                    if (imageBuffer) {
-                      await withRetry(() =>
-                        conn.sendMessage(mek.key.remoteJid, {
-                          image: imageBuffer,
-                          caption: caption || '',
-                          contextInfo,
-                        }, { quoted: mek })
-                      );
-                    }
-                    break;
-                  case 'video':
-                    const videoBuffer = await fetchMedia(url);
-                    if (videoBuffer) {
-                      await withRetry(() =>
-                        conn.sendMessage(mek.key.remoteJid, {
-                          video: videoBuffer,
-                          caption: caption || '',
-                          contextInfo,
-                        }, { quoted: mek })
-                      );
-                    }
-                    break;
-                  case 'voice':
-                    const voiceBuffer = await fetchMedia(url);
-                    if (voiceBuffer) {
-                      await withRetry(() =>
-                        conn.sendMessage(mek.key.remoteJid, {
-                          audio: voiceBuffer,
-                          mimetype: 'audio/mpeg',
-                          ptt: true,
-                          contextInfo,
-                        }, { quoted: mek })
-                      );
-                    }
-                    break;
-                }
-              }
-              break;
-            }
-          }
+    if (isMatch) {
+      autoReplySent = true;
+      await pool.query(
+        `UPDATE messages SET auto_reply_sent = TRUE WHERE message_id = $1`,
+        [mek.key.id]
+      );
+      for (const response of rule.response) {
+        if (response.delay) {
+          await new Promise(resolve => setTimeout(resolve, response.delay));
         }
-
+        const contextInfo = {
+          quotedMessage: mek.message,
+          forwardingScore: 999,
+          isForwarded: true,
+          forwardedNewsletterMessageInfo: {
+            newsletterJid: '120363286758767913@newsletter',
+            newsletterName: 'JOIN CHANNEL 👋',
+            serverMessageId: 143,
+          },
+        };
+        let content = response.content || '';
+        let caption = response.caption || '';
+        let url = response.url || '';
+        if (content) {
+          content = content.replace(/\${pushname}/g, pushName).replace(/\${userid}/g, userId).replace(/\${senderdpurl}/g, senderDpUrl);
+        }
+        if (caption) {
+          caption = caption.replace(/\${pushname}/g, pushName).replace(/\${userid}/g, userId).replace(/\${senderdpurl}/g, senderDpUrl);
+        }
+        if (url) {
+          url = url.replace(/\${pushname}/g, pushName).replace(/\${userid}/g, userId).replace(/\${senderdpurl}/g, senderDpUrl);
+        }
+        switch (response.type) {
+          case 'text':
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: content,
+                contextInfo,
+              }, { quoted: mek })
+            );
+            break;
+          case 'image':
+            const imageBuffer = await fetchMedia(url);
+            if (imageBuffer) {
+              await withRetry(() =>
+                conn.sendMessage(mek.key.remoteJid, {
+                  image: imageBuffer,
+                  caption: caption,
+                  contextInfo,
+                }, { quoted: mek })
+              );
+            }
+            break;
+          case 'video':
+            const videoBuffer = await fetchMedia(url);
+            if (videoBuffer) {
+              await withRetry(() =>
+                conn.sendMessage(mek.key.remoteJid, {
+                  video: videoBuffer,
+                  caption: caption,
+                  contextInfo,
+                }, { quoted: mek })
+              );
+            }
+            break;
+          case 'voice':
+            const voiceBuffer = await fetchMedia(url);
+            if (voiceBuffer) {
+              await withRetry(() =>
+                conn.sendMessage(mek.key.remoteJid, {
+                  audio: voiceBuffer,
+                  mimetype: 'audio/mpeg',
+                  ptt: true,
+                  contextInfo,
+                }, { quoted: mek })
+              );
+            }
+            break;
+        }
+      }
+      break;
+    }
+  }
+}
         // Command handling
         if (messageText && messageText.startsWith('.')) {
           const [command, ...args] = messageText.split(' ');
