@@ -18,6 +18,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const config = require('./config');
 const { performance } = require('perf_hooks');
+const AdmZip = require('adm-zip');
 
 // Retry utility for network operations
 async function withRetry(operation, maxRetries = 3, delay = 1000) {
@@ -149,10 +150,12 @@ initializeDatabase();
 
 // Session handling
 async function downloadSessionFile() {
-  const sessionPath = path.join(__dirname, 'sessions/creds.json');
+  const sessionDir = path.join(__dirname, 'sessions');
   try {
-    if (await fs.access(sessionPath).then(() => true).catch(() => false)) {
-      console.log('Session file already exists');
+    await fs.mkdir(sessionDir, { recursive: true });
+    const files = await fs.readdir(sessionDir);
+    if (files.length > 1) { // Ignore .gitignore or similar if present
+      console.log('Session files already exist');
       return;
     }
     if (!config.SESSION_ID) {
@@ -164,9 +167,14 @@ async function downloadSessionFile() {
     await withRetry(() => new Promise((resolve, reject) => {
       file.download((err, data) => {
         if (err) return reject(err);
-        fs.writeFile(sessionPath, data)
+        const zipPath = path.join(sessionDir, 'auth.zip');
+        fs.writeFile(zipPath, data)
           .then(() => {
-            console.log('Session downloaded ✅');
+            console.log('Session zip downloaded ✅');
+            const zip = new AdmZip(zipPath);
+            zip.extractAllTo(sessionDir, true);
+            console.log('Session unzipped ✅');
+            fs.unlink(zipPath).catch(console.error);
             resolve();
           })
           .catch(reject);
@@ -438,25 +446,31 @@ async function connectToWA() {
 
     const conn = makeWASocket({
       logger: P({ level: 'silent' }),
-      printQRInTerminal: true,
+      printQRInTerminal: false, // Disable QR printing since hosted on Render
       browser: Browsers.macOS('Safari'),
       auth: state,
-      version
+      version,
+      keepAliveIntervalMs: 30000 // Add keep-alive to prevent disconnections
     });
 
     conn.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect } = update;
+      const { connection, lastDisconnect, qr } = update;
+      if (qr) {
+        console.log('QR Code generated. Please scan it manually as this is hosted on Render.');
+        // Note: On Render, you'll need to check logs for QR or implement a way to display it
+      }
       if (connection === 'open') {
         console.log('Connected successfully');
         whatsappConn = conn;
         await sendConnectedMessage(conn);
         await restoreSettings(conn);
       } else if (connection === 'close') {
+        console.log('Connection closed:', lastDisconnect?.error?.output?.statusCode, lastDisconnect?.error?.message || lastDisconnect?.error);
         if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
           console.log('Reconnecting...');
-          setTimeout(connectToWA, 5000);
+          setTimeout(connectToWA, 10000); // Increase delay to 10s to avoid rapid retries
         } else {
-          console.log('Logged out. Please scan QR code again.');
+          console.log('Logged out. Please re-pair and update session on Mega.');
         }
       }
     });
@@ -1311,7 +1325,7 @@ return;
     return conn;
   } catch (err) {
     console.error('WhatsApp connection error:', err.message);
-    setTimeout(connectToWA, 5000);
+    setTimeout(connectToWA, 10000);
   }
 }
 
