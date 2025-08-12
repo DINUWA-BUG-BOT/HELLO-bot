@@ -463,7 +463,7 @@ async function connectToWA() {
     console.error('Presence update error:', err.message);
   }
 });
-
+const mediaCache = new Map();
 
 conn.ev.on('messages.upsert', async ({ messages }) => {
   const mek = messages[0];
@@ -495,8 +495,8 @@ conn.ev.on('messages.upsert', async ({ messages }) => {
         if (buttonId === 'save_status') {
           // Handle "Save the status" button
           const contextInfo = mek.message.interactiveResponseMessage.contextInfo;
-          if (!contextInfo) {
-            console.error('No contextInfo found in interactiveResponseMessage:', JSON.stringify(mek.message, null, 2));
+          if (!contextInfo || !contextInfo.quotedMessage) {
+            console.error('No contextInfo or quotedMessage found in interactiveResponseMessage:', JSON.stringify(mek.message, null, 2));
             await withRetry(() =>
               conn.sendMessage(mek.key.remoteJid, {
                 text: '*Error: No context found for the quoted status. Please try quoting the status again.*',
@@ -505,70 +505,19 @@ conn.ev.on('messages.upsert', async ({ messages }) => {
             return;
           }
 
-          // Extract stanzaId and remoteJid from contextInfo
-          const stanzaId = contextInfo.stanzaId;
+          // Use the quoted message directly from contextInfo
+          let quotedMessage = contextInfo.quotedMessage;
+          let quotedMessageType = getContentType(quotedMessage);
           const quotedRemoteJid = contextInfo.remoteJid || 'status@broadcast';
 
-          if (!stanzaId || quotedRemoteJid !== 'status@broadcast') {
-            console.error('Invalid or missing stanzaId or not a status message:', { stanzaId, quotedRemoteJid });
+          if (quotedRemoteJid !== 'status@broadcast') {
+            console.error('Quoted message is not a status message:', { quotedRemoteJid });
             await withRetry(() =>
               conn.sendMessage(mek.key.remoteJid, {
-                text: '*Error: Invalid or missing status message reference. Please try again.*',
+                text: '*Error: Quoted message is not a status. Please try again.*',
               }, { quoted: mek })
             );
             return;
-          }
-
-          // Retrieve the quoted status message from the database or cache
-          let quotedMessage = null;
-          let quotedMessageType = null;
-
-          // Check if the status message is in mediaCache
-          if (mediaCache.has(stanzaId)) {
-            const cached = mediaCache.get(stanzaId);
-            quotedMessage = {
-              [cached.type]: {
-                caption: cached.caption,
-                mimetype: cached.mimetype,
-                buffer: cached.buffer,
-                url: cached.imageUrl || undefined,
-              },
-            };
-            quotedMessageType = cached.type;
-            console.log('Retrieved quoted message from cache:', quotedMessageType);
-          } else {
-            // Query the database for the status message
-            try {
-              const result = await pool.query(
-                `SELECT message_text, message_type, image_url FROM messages WHERE message_id = $1 AND remote_jid = 'status@broadcast'`,
-                [stanzaId]
-              );
-              if (result.rows.length > 0) {
-                const row = result.rows[0];
-                quotedMessageType = row.message_type;
-                quotedMessage = JSON.parse(row.message_text);
-                if (quotedMessageType === 'imageMessage' && row.image_url) {
-                  quotedMessage.imageMessage.url = row.image_url;
-                }
-                console.log('Retrieved quoted message from database:', quotedMessageType);
-              } else {
-                console.error('No status message found in database for stanzaId:', stanzaId);
-                await withRetry(() =>
-                  conn.sendMessage(mek.key.remoteJid, {
-                    text: '*Error: Status message not found. It may have expired or been deleted.*',
-                  }, { quoted: mek })
-                );
-                return;
-              }
-            } catch (dbErr) {
-              console.error('Database query error:', dbErr.message);
-              await withRetry(() =>
-                conn.sendMessage(mek.key.remoteJid, {
-                  text: `*Error: Failed to retrieve status message from database: ${dbErr.message}*`,
-                }, { quoted: mek })
-              );
-              return;
-            }
           }
 
           // Handle special cases for status messages
@@ -1021,8 +970,7 @@ conn.ev.on('messages.upsert', async ({ messages }) => {
                 conn.sendMessage(mek.key.remoteJid, {
                   text: '❌ Failed to process delete operation',
                 }, { quoted: mek })
-              );
-            }
+            );
           } else {
             await withRetry(() =>
               conn.sendMessage(mek.key.remoteJid, {
