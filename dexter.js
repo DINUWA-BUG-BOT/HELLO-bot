@@ -869,9 +869,8 @@ if (messageText && statusTriggers.includes(messageText)) {
     await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
       text: '*Quoted status is not an image, video, text, voice, or audio*'
     }, { quoted: mek }));
-  }
-  return;
 }
+return;
         }        // Existing auto-reply logic
         if (
           messageText &&
