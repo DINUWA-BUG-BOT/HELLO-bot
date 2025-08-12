@@ -1221,7 +1221,7 @@ if (
 
     conn.ev.on('messages.update', async (updates) => {
       for (const update of updates) {
-        if (update.update.message === null彼此
+        if (update.update.message === null)
 
 ) {
           await handleDeletedMessage(conn, update);
