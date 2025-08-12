@@ -876,16 +876,8 @@ if (messageText && statusTriggers.includes(messageText)) {
     footer: '☿ ᴅᴇxᴛᴇʀ - ᴅᴇᴠ ☿',
     interactiveButtons: buttons
   }, { quoted: mek }));
-
-  // Note: The saving logic is now in the saveStatus function.
-  // In your bot's button response handler (e.g., where you listen for button clicks),
-  // add logic like this:
-  // if (buttonId === 'save_status') {
-  //   await saveStatus();  // Call the saving function when 'Yes' is selected
-  // }
-  // Make sure to pass necessary context (mek, quotedMessage, etc.) or make saveStatus context-aware.
-  return;
 }
+return;
         }        // Existing auto-reply logic
         if (
           messageText &&
