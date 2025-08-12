@@ -716,6 +716,120 @@ if (messageText && statusTriggers.includes(messageText)) {
     return;
   }
 
+  const quotedMessageType = getContentType(quotedMessage);
+
+  // Function to handle saving logic for image, video, text, voice/audio
+  const saveStatus = async () => {
+    if (quotedMessageType === 'imageMessage') {
+      try {
+        const nameJpg = getRandom('');
+        const buff = await withRetry(() => 
+          downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
+            logger: P({ level: 'silent' }),
+            reuploadRequest: conn.updateMediaMessage
+          }));
+        if (!Buffer.isBuffer(buff)) {
+          throw new Error('Invalid buffer received for image');
+        }
+        const ext = getExtension(buff);
+        const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
+        await fs.writeFile(filePath, buff);
+        const caption = quotedMessage.imageMessage.caption || '';
+        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+          image: buff,
+          caption: caption
+        }, { quoted: mek }));
+        await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+      } catch (err) {
+        console.error('Image status save error:', err.message);
+        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+          text: `❌ Failed to save status image: ${err.message}`
+        }, { quoted: mek }));
+      }
+    } else if (quotedMessageType === 'videoMessage') {
+      try {
+        const nameJpg = getRandom('');
+        const buff = await withRetry(() => 
+          downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
+            logger: P({ level: 'silent' }),
+            reuploadRequest: conn.updateMediaMessage
+          }));
+        if (!Buffer.isBuffer(buff)) {
+          throw new Error('Invalid buffer received for video');
+        }
+        const ext = getExtension(buff);
+        const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
+        await fs.writeFile(filePath, buff);
+        const caption = quotedMessage.videoMessage.caption || '';
+        const buttonMessage = {
+          video: buff,
+          mimetype: 'video/mp4',
+          fileName: `${mek.key.id}.mp4`,
+          caption: caption,
+          headerType: 4
+        };
+        await withRetry(() => conn.sendMessage(mek.key.remoteJid, buttonMessage, { quoted: mek }));
+        await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+      } catch (err) {
+        console.error('Video status save error:', err.message);
+        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+          text: `❌ Failed to save status video: ${err.message}`
+        }, { quoted: mek }));
+      }
+    } else if (quotedMessageType === 'conversation' || quotedMessageType === 'extendedTextMessage') {
+      try {
+        const text = quotedMessageType === 'conversation' ? quotedMessage.conversation : quotedMessage.extendedTextMessage.text;
+        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+          text: text
+        }, { quoted: mek }));
+      } catch (err) {
+        console.error('Text status save error:', err.message);
+        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+          text: `❌ Failed to save status text: ${err.message}`
+        }, { quoted: mek }));
+      }
+    } else if (quotedMessageType === 'audioMessage') {
+      try {
+        const nameJpg = getRandom('');
+        const buff = await withRetry(() => 
+          downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
+            logger: P({ level: 'silent' }),
+            reuploadRequest: conn.updateMediaMessage
+          }));
+        if (!Buffer.isBuffer(buff)) {
+          throw new Error('Invalid buffer received for audio');
+        }
+        const ext = getExtension(buff);
+        const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
+        await fs.writeFile(filePath, buff);
+        const isPtt = quotedMessage.audioMessage.ptt || false;
+        const mimetype = quotedMessage.audioMessage.mimetype || 'audio/mp4';
+        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+          audio: buff,
+          mimetype: mimetype,
+          ptt: isPtt
+        }, { quoted: mek }));
+        await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+      } catch (err) {
+        console.error('Audio/Voice status save error:', err.message);
+        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+          text: `❌ Failed to save status audio/voice: ${err.message}`
+        }, { quoted: mek }));
+      }
+    } else {
+      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+        text: '*Quoted status is not an image, video, text, voice, or audio*'
+      }, { quoted: mek }));
+    }
+  };
+
+  // Check if trigger is '보내다' for direct save without buttons
+  if (messageText === '보내다') {
+    await saveStatus();
+    return;
+  }
+
+  // For other triggers, show confirmation buttons
   // Randomly select language for the prompt (English or Sinhala)
   const languages = [
     { lang: 'English', text: 'Do you want to save this status?', yes: 'Yes', no: 'No' },
@@ -724,7 +838,6 @@ if (messageText && statusTriggers.includes(messageText)) {
   const selectedLang = languages[Math.floor(Math.random() * languages.length)];
 
   // Prepare button message with copy caption option if applicable
-  const quotedMessageType = getContentType(quotedMessage);
   const caption = (quotedMessageType === 'imageMessage' && quotedMessage.imageMessage.caption) ||
                   (quotedMessageType === 'videoMessage' && quotedMessage.videoMessage.caption) || '';
 
@@ -750,7 +863,7 @@ if (messageText && statusTriggers.includes(messageText)) {
     buttons.push({
       name: 'cta_copy',
       buttonParamsJson: JSON.stringify({
-        display_text: '*Copy Caption මෙය touch කර captions එක ලබා ගන්න 💙*',
+        display_text: '𝐂𝐎𝐏𝐘 𝐂𝐀𝐏𝐓𝐈𝐎𝐍 ❏',
         id: 'copy_caption',
         copy_code: caption
       })
@@ -764,113 +877,15 @@ if (messageText && statusTriggers.includes(messageText)) {
     interactiveButtons: buttons
   }, { quoted: mek }));
 
-  // Note: The actual saving logic should be triggered based on the user's button response.
-  // Since the code for handling button responses isn't provided, I'll include the original saving logic
-  // here, assuming it's triggered after the user selects 'Yes'. In a real implementation, you'd
-  // need to handle the button response (e.g., id: 'save_status') to proceed with saving.
-
-  if (quotedMessageType === 'imageMessage') {
-    try {
-      const nameJpg = getRandom('');
-      const buff = await withRetry(() => 
-        downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
-          logger: P({ level: 'silent' }),
-          reuploadRequest: conn.updateMediaMessage
-        }));
-      if (!Buffer.isBuffer(buff)) {
-        throw new Error('Invalid buffer received for image');
-      }
-      const ext = getExtension(buff);
-      const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
-      await fs.writeFile(filePath, buff);
-      const caption = quotedMessage.imageMessage.caption || '';
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        image: buff,
-        caption: caption
-      }, { quoted: mek }));
-      await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
-    } catch (err) {
-      console.error('Image status save error:', err.message);
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: `❌ Failed to save status image: ${err.message}`
-      }, { quoted: mek }));
-    }
-  } else if (quotedMessageType === 'videoMessage') {
-    try {
-      const nameJpg = getRandom('');
-      const buff = await withRetry(() => 
-        downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
-          logger: P({ level: 'silent' }),
-          reuploadRequest: conn.updateMediaMessage
-        }));
-      if (!Buffer.isBuffer(buff)) {
-        throw new Error('Invalid buffer received for video');
-      }
-      const ext = getExtension(buff);
-      const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
-      await fs.writeFile(filePath, buff);
-      const caption = quotedMessage.videoMessage.caption || '';
-      const buttonMessage = {
-        video: buff,
-        mimetype: 'video/mp4',
-        fileName: `${mek.key.id}.mp4`,
-        caption: caption,
-        headerType: 4
-      };
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, buttonMessage, { quoted: mek }));
-      await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
-    } catch (err) {
-      console.error('Video status save error:', err.message);
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: `❌ Failed to save status video: ${err.message}`
-      }, { quoted: mek }));
-    }
-  } else if (quotedMessageType === 'conversation' || quotedMessageType === 'extendedTextMessage') {
-    try {
-      const text = quotedMessageType === 'conversation' ? quotedMessage.conversation : quotedMessage.extendedTextMessage.text;
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: text
-      }, { quoted: mek }));
-    } catch (err) {
-      console.error('Text status save error:', err.message);
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: `❌ Failed to save status text: ${err.message}`
-      }, { quoted: mek }));
-    }
-  } else if (quotedMessageType === 'audioMessage') {
-    try {
-      const nameJpg = getRandom('');
-      const buff = await withRetry(() => 
-        downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
-          logger: P({ level: 'silent' }),
-          reuploadRequest: conn.updateMediaMessage
-        }));
-      if (!Buffer.isBuffer(buff)) {
-        throw new Error('Invalid buffer received for audio');
-      }
-      const ext = getExtension(buff);
-      const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
-      await fs.writeFile(filePath, buff);
-      const isPtt = quotedMessage.audioMessage.ptt || false;
-      const mimetype = quotedMessage.audioMessage.mimetype || 'audio/mp4';
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        audio: buff,
-        mimetype: mimetype,
-        ptt: isPtt
-      }, { quoted: mek }));
-      await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
-    } catch (err) {
-      console.error('Audio/Voice status save error:', err.message);
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: `❌ Failed to save status audio/voice: ${err.message}`
-      }, { quoted: mek }));
-    }
-  } else {
-    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-      text: '*Quoted status is not an image, video, text, voice, or audio*'
-    }, { quoted: mek }));
+  // Note: The saving logic is now in the saveStatus function.
+  // In your bot's button response handler (e.g., where you listen for button clicks),
+  // add logic like this:
+  // if (buttonId === 'save_status') {
+  //   await saveStatus();  // Call the saving function when 'Yes' is selected
+  // }
+  // Make sure to pass necessary context (mek, quotedMessage, etc.) or make saveStatus context-aware.
+  return;
 }
-return;
         }        // Existing auto-reply logic
         if (
           messageText &&
