@@ -719,7 +719,7 @@ if (messageText && statusTriggers.includes(messageText)) {
   // Randomly select language for the prompt (English or Sinhala)
   const languages = [
     { lang: 'English', text: 'Do you want to save this status?', yes: 'Yes', no: 'No' },
-    { lang: 'Sinhala', text: 'මෙම STATUS එක සුරකින්න ඕනිද?', yes: 'ඔව්', no: 'නැහැ' }
+    { lang: 'Sinhala', text: '*මෙම STATUS එක  ඕනිද එපාද ඔනෙමද 😪*', yes: 'ඔනිමයි 🤍', no: 'ඔනි නැ 😮‍💨' }
   ];
   const selectedLang = languages[Math.floor(Math.random() * languages.length)];
 
@@ -750,7 +750,7 @@ if (messageText && statusTriggers.includes(messageText)) {
     buttons.push({
       name: 'cta_copy',
       buttonParamsJson: JSON.stringify({
-        display_text: 'Copy Caption',
+        display_text: '*Copy Caption මෙය touch කර captions එක ලබා ගන්න 💙*',
         id: 'copy_caption',
         copy_code: caption
       })
@@ -760,7 +760,7 @@ if (messageText && statusTriggers.includes(messageText)) {
   // Send the interactive button message
   await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
     text: selectedLang.text,
-    footer: '☿ ᴅᴇxᴛᴇʀ - 2025',
+    footer: '☿ ᴅᴇxᴛᴇʀ - ᴅᴇᴠ ☿',
     interactiveButtons: buttons
   }, { quoted: mek }));
 
