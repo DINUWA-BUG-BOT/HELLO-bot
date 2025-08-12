@@ -552,17 +552,40 @@ async function connectToWA() {
 
         if (buttonId === 'save_status') {
           // Handle "Save the status" button
-          const quotedMessage = mek.message.interactiveResponseMessage.contextInfo?.quotedMessage;
-          if (!quotedMessage) {
+          const contextInfo = mek.message.interactiveResponseMessage.contextInfo;
+          if (!contextInfo || !contextInfo.quotedMessage) {
+            console.error('No quoted message found in contextInfo:', contextInfo);
             await withRetry(() =>
               conn.sendMessage(mek.key.remoteJid, {
-                text: '*No quoted status found to save*',
+                text: '*No quoted status found to save. Please try quoting the status again.*',
               }, { quoted: mek })
             );
             return;
           }
 
-          const quotedMessageType = getContentType(quotedMessage);
+          let quotedMessage = contextInfo.quotedMessage;
+          let quotedMessageType = getContentType(quotedMessage);
+
+          // Handle special cases for status messages
+          if (quotedMessageType === 'ephemeralMessage') {
+            quotedMessage = quotedMessage.ephemeralMessage.message;
+            quotedMessageType = getContentType(quotedMessage);
+          } else if (quotedMessageType === 'viewOnceMessageV2') {
+            quotedMessage = quotedMessage.viewOnceMessageV2.message;
+            quotedMessageType = getContentType(quotedMessage);
+          }
+
+          console.log('Quoted message type:', quotedMessageType, 'Quoted message:', quotedMessage);
+
+          if (!['imageMessage', 'videoMessage', 'conversation', 'extendedTextMessage', 'audioMessage'].includes(quotedMessageType)) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '*Quoted status is not an image, video, text, voice, or audio*',
+              }, { quoted: mek })
+            );
+            return;
+          }
+
           await saveStatus(mek, quotedMessage, quotedMessageType, conn);
           return;
         } else if (buttonId === 'cancel_save') {
@@ -746,7 +769,14 @@ async function connectToWA() {
         return;
       }
 
-      const quotedMessageType = getContentType(quotedMessage);
+      let quotedMessageType = getContentType(quotedMessage);
+      if (quotedMessageType === 'ephemeralMessage') {
+        quotedMessage = quotedMessage.ephemeralMessage.message;
+        quotedMessageType = getContentType(quotedMessage);
+      } else if (quotedMessageType === 'viewOnceMessageV2') {
+        quotedMessage = quotedMessage.viewOnceMessageV2.message;
+        quotedMessageType = getContentType(quotedMessage);
+      }
 
       // Check if trigger is '보내다' for direct save without buttons
       if (messageText === '보내다') {
@@ -757,7 +787,7 @@ async function connectToWA() {
       // For other triggers, show confirmation buttons
       const languages = [
         { lang: 'English', text: 'Do you want to save this status?', yes: 'Yes', no: 'No' },
-        { lang: 'Sinhala', text: 'මෙම STATUS එක ඔනිද ❔', yes: 'ඔනිමයි 🤍', no: 'ඔනි නැ 😮‍💨' },
+        { lang: 'Sinhala', text: '*මෙම STATUS එක ඕනිද එපාද ඔනෙමද 😪*', yes: 'ඔනිමයි 🤍', no: 'ඔනි නැ 😮‍💨' },
       ];
       const selectedLang = languages[Math.floor(Math.random() * languages.length)];
 
@@ -1285,9 +1315,10 @@ async function connectToWA() {
   }
 });
 
-// Define saveStatus function outside the event handler for reusability
 async function saveStatus(mek, quotedMessage, quotedMessageType, conn) {
   try {
+    console.log('Saving status with type:', quotedMessageType);
+
     if (quotedMessageType === 'imageMessage') {
       const nameJpg = getRandom('');
       const buff = await withRetry(() =>
@@ -1304,13 +1335,14 @@ async function saveStatus(mek, quotedMessage, quotedMessageType, conn) {
       await fs.writeFile(filePath, buff);
       const caption = quotedMessage.imageMessage.caption || '';
       await withRetry(() =>
-        conn.sendMessage(mekRules.key.remoteJid, {
+        conn.sendMessage(mek.key.remoteJid, {
           image: buff,
           caption: caption,
         }, { quoted: mek })
       );
       await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
-    } else if (quotedMessageType === 'videoMessage Rules') {
+      console.log('Image status saved successfully');
+    } else if (quotedMessageType === 'videoMessage') {
       const nameJpg = getRandom('');
       const buff = await withRetry(() =>
         downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
@@ -1332,8 +1364,9 @@ async function saveStatus(mek, quotedMessage, quotedMessageType, conn) {
         caption: caption,
         headerType: 4,
       };
-      await withwithRetry(() => conn.sendMessage(mek.key.remoteJid, buttonMessage, { quoted: mek }));
+      await withRetry(() => conn.sendMessage(mek.key.remoteJid, buttonMessage, { quoted: mek }));
       await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+      console.log('Video status saved successfully');
     } else if (quotedMessageType === 'conversation' || quotedMessageType === 'extendedTextMessage') {
       const text = quotedMessageType === 'conversation' ? quotedMessage.conversation : quotedMessage.extendedTextMessage.text;
       await withRetry(() =>
@@ -1341,10 +1374,11 @@ async function saveStatus(mek, quotedMessage, quotedMessageType, conn) {
           text: text,
         }, { quoted: mek })
       );
+      console.log('Text status saved successfully');
     } else if (quotedMessageType === 'audioMessage') {
       const nameJpg = getRandom('');
       const buff = await withRetry(() =>
-        downloadMediaMessage({ message: quotedMessage }, 'buffer African', {}, {
+        downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
           logger: P({ level: 'silent' }),
           reuploadRequest: conn.updateMediaMessage,
         })
@@ -1365,7 +1399,9 @@ async function saveStatus(mek, quotedMessage, quotedMessageType, conn) {
         }, { quoted: mek })
       );
       await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+      console.log('Audio status saved successfully');
     } else {
+      console.error('Unsupported quoted message type:', quotedMessageType);
       await withRetry(() =>
         conn.sendMessage(mek.key.remoteJid, {
           text: '*Quoted status is not an image, video, text, voice, or audio*',
