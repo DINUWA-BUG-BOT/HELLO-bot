@@ -18,7 +18,6 @@ const axios = require('axios');
 const FormData = require('form-data');
 const config = require('./config');
 const { performance } = require('perf_hooks');
-const AdmZip = require('adm-zip');
 
 // Retry utility for network operations
 async function withRetry(operation, maxRetries = 3, delay = 1000) {
@@ -150,12 +149,10 @@ initializeDatabase();
 
 // Session handling
 async function downloadSessionFile() {
-  const sessionDir = path.join(__dirname, 'sessions');
+  const sessionPath = path.join(__dirname, 'sessions/creds.json');
   try {
-    await fs.mkdir(sessionDir, { recursive: true });
-    const files = await fs.readdir(sessionDir);
-    if (files.length > 1) { // Ignore .gitignore or similar if present
-      console.log('Session files already exist');
+    if (await fs.access(sessionPath).then(() => true).catch(() => false)) {
+      console.log('Session file already exists');
       return;
     }
     if (!config.SESSION_ID) {
@@ -167,14 +164,9 @@ async function downloadSessionFile() {
     await withRetry(() => new Promise((resolve, reject) => {
       file.download((err, data) => {
         if (err) return reject(err);
-        const zipPath = path.join(sessionDir, 'auth.zip');
-        fs.writeFile(zipPath, data)
+        fs.writeFile(sessionPath, data)
           .then(() => {
-            console.log('Session zip downloaded ✅');
-            const zip = new AdmZip(zipPath);
-            zip.extractAllTo(sessionDir, true);
-            console.log('Session unzipped ✅');
-            fs.unlink(zipPath).catch(console.error);
+            console.log('Session downloaded ✅');
             resolve();
           })
           .catch(reject);
@@ -446,31 +438,25 @@ async function connectToWA() {
 
     const conn = makeWASocket({
       logger: P({ level: 'silent' }),
-      printQRInTerminal: false, // Disable QR printing since hosted on Render
+      printQRInTerminal: true,
       browser: Browsers.macOS('Safari'),
       auth: state,
-      version,
-      keepAliveIntervalMs: 30000 // Add keep-alive to prevent disconnections
+      version
     });
 
     conn.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-      if (qr) {
-        console.log('QR Code generated. Please scan it manually as this is hosted on Render.');
-        // Note: On Render, you'll need to check logs for QR or implement a way to display it
-      }
+      const { connection, lastDisconnect } = update;
       if (connection === 'open') {
         console.log('Connected successfully');
         whatsappConn = conn;
         await sendConnectedMessage(conn);
         await restoreSettings(conn);
       } else if (connection === 'close') {
-        console.log('Connection closed:', lastDisconnect?.error?.output?.statusCode, lastDisconnect?.error?.message || lastDisconnect?.error);
         if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
           console.log('Reconnecting...');
-          setTimeout(connectToWA, 10000); // Increase delay to 10s to avoid rapid retries
+          setTimeout(connectToWA, 5000);
         } else {
-          console.log('Logged out. Please re-pair and update session on Mega.');
+          console.log('Logged out. Please scan QR code again.');
         }
       }
     });
@@ -705,184 +691,132 @@ async function connectToWA() {
         }
 
         // Handle status saving commands
-        // Handle status saving commands
-const statusTriggers = [
-  'send', 'Send', 'Seve', 'Ewpm', 'ewpn', 'Dapan', 'dapan',
-  'oni', 'Oni', 'save', 'Save', 'ewanna', 'Ewanna', 'ewam',
-  'Ewam', 'sv', 'Sv', '보내다', 'එවම්න'
-];
+        const statusTriggers = [
+          'send', 'Send', 'Seve', 'Ewpm', 'ewpn', 'Dapan', 'dapan',
+          'oni', 'Oni', 'save', 'Save', 'ewanna', 'Ewanna', 'ewam',
+          'Ewam', 'sv', 'Sv', '보내다', 'එවම්න'
+        ];
 
-if (messageText && statusTriggers.includes(messageText)) {
-  if (!mek.message.extendedTextMessage || !mek.message.extendedTextMessage.contextInfo.quotedMessage) {
-    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-      text: '*TNX FOR SAVE 💙*'
-    }, { quoted: mek }));
-    return;
-  }
-
-  const quotedMessage = mek.message.extendedTextMessage.contextInfo.quotedMessage;
-  const isStatus = mek.message.extendedTextMessage.contextInfo.remoteJid === 'status@broadcast';
-  
-  if (!isStatus) {
-    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-      text: '*TNX FOR SAVE*'
-    }, { quoted: mek }));
-    return;
-  }
-
-  // Randomly select language for the prompt (English or Sinhala)
-  const languages = [
-    { lang: 'English', text: 'Do you want to save this status?', yes: 'Yes', no: 'No' },
-    { lang: 'Sinhala', text: 'මෙම STATUS එක සුරකින්න ඕනිද?', yes: 'ඔව්', no: 'නැහැ' }
-  ];
-  const selectedLang = languages[Math.floor(Math.random() * languages.length)];
-
-  // Prepare button message with copy caption option if applicable
-  const quotedMessageType = getContentType(quotedMessage);
-  const caption = (quotedMessageType === 'imageMessage' && quotedMessage.imageMessage.caption) ||
-                  (quotedMessageType === 'videoMessage' && quotedMessage.videoMessage.caption) || '';
-
-  const buttons = [
-    {
-      name: 'single_select',
-      buttonParamsJson: JSON.stringify({
-        title: selectedLang.text,
-        sections: [
-          {
-            rows: [
-              { header: '', title: selectedLang.yes, description: 'Save the status', id: 'save_status' },
-              { header: '', title: selectedLang.no, description: 'Cancel', id: 'cancel_save' }
-            ]
+        if (messageText && statusTriggers.includes(messageText)) {
+          if (!mek.message.extendedTextMessage || !mek.message.extendedTextMessage.contextInfo.quotedMessage) {
+            await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+              text: '*TNX FOR SAVE 💙*'
+            }, { quoted: mek }));
+            return;
           }
-        ]
-      })
-    }
-  ];
 
-  // Add copy caption button if there is a caption
-  if (caption) {
-    buttons.push({
-      name: 'cta_copy',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'Copy Caption',
-        id: 'copy_caption',
-        copy_code: caption
-      })
-    });
-  }
+          const quotedMessage = mek.message.extendedTextMessage.contextInfo.quotedMessage;
+          const isStatus = mek.message.extendedTextMessage.contextInfo.remoteJid === 'status@broadcast';
+          
+          if (!isStatus) {
+            await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+              text: '*TNX FOR SAVE*'
+            }, { quoted: mek }));
+            return;
+          }
 
-  // Send the interactive button message
-  await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-    text: selectedLang.text,
-    footer: '☿ ᴅᴇxᴛᴇʀ - 2025',
-    interactiveButtons: buttons
-  }, { quoted: mek }));
-
-  // Note: The actual saving logic should be triggered based on the user's button response.
-  // Since the code for handling button responses isn't provided, I'll include the original saving logic
-  // here, assuming it's triggered after the user selects 'Yes'. In a real implementation, you'd
-  // need to handle the button response (e.g., id: 'save_status') to proceed with saving.
-
-  if (quotedMessageType === 'imageMessage') {
-    try {
-      const nameJpg = getRandom('');
-      const buff = await withRetry(() => 
-        downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
-          logger: P({ level: 'silent' }),
-          reuploadRequest: conn.updateMediaMessage
-        }));
-      if (!Buffer.isBuffer(buff)) {
-        throw new Error('Invalid buffer received for image');
-      }
-      const ext = getExtension(buff);
-      const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
-      await fs.writeFile(filePath, buff);
-      const caption = quotedMessage.imageMessage.caption || '';
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        image: buff,
-        caption: caption
-      }, { quoted: mek }));
-      await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
-    } catch (err) {
-      console.error('Image status save error:', err.message);
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: `❌ Failed to save status image: ${err.message}`
-      }, { quoted: mek }));
+          const quotedMessageType = getContentType(quotedMessage);
+          
+          if (quotedMessageType === 'imageMessage') {
+  try {
+    const nameJpg = getRandom('');
+    const buff = await withRetry(() => 
+      downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
+        logger: P({ level: 'silent' }),
+        reuploadRequest: conn.updateMediaMessage
+      }));
+    if (!Buffer.isBuffer(buff)) {
+      throw new Error('Invalid buffer received for image');
     }
-  } else if (quotedMessageType === 'videoMessage') {
-    try {
-      const nameJpg = getRandom('');
-      const buff = await withRetry(() => 
-        downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
-          logger: P({ level: 'silent' }),
-          reuploadRequest: conn.updateMediaMessage
-        }));
-      if (!Buffer.isBuffer(buff)) {
-        throw new Error('Invalid buffer received for video');
-      }
-      const ext = getExtension(buff);
-      const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
-      await fs.writeFile(filePath, buff);
-      const caption = quotedMessage.videoMessage.caption || '';
-      const buttonMessage = {
-        video: buff,
-        mimetype: 'video/mp4',
-        fileName: `${mek.key.id}.mp4`,
-        caption: caption,
-        headerType: 4
-      };
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, buttonMessage, { quoted: mek }));
-      await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
-    } catch (err) {
-      console.error('Video status save error:', err.message);
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: `❌ Failed to save status video: ${err.message}`
-      }, { quoted: mek }));
-    }
-  } else if (quotedMessageType === 'conversation' || quotedMessageType === 'extendedTextMessage') {
-    try {
-      const text = quotedMessageType === 'conversation' ? quotedMessage.conversation : quotedMessage.extendedTextMessage.text;
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: text
-      }, { quoted: mek }));
-    } catch (err) {
-      console.error('Text status save error:', err.message);
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: `❌ Failed to save status text: ${err.message}`
-      }, { quoted: mek }));
-    }
-  } else if (quotedMessageType === 'audioMessage') {
-    try {
-      const nameJpg = getRandom('');
-      const buff = await withRetry(() => 
-        downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
-          logger: P({ level: 'silent' }),
-          reuploadRequest: conn.updateMediaMessage
-        }));
-      if (!Buffer.isBuffer(buff)) {
-        throw new Error('Invalid buffer received for audio');
-      }
-      const ext = getExtension(buff);
-      const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
-      await fs.writeFile(filePath, buff);
-      const isPtt = quotedMessage.audioMessage.ptt || false;
-      const mimetype = quotedMessage.audioMessage.mimetype || 'audio/mp4';
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        audio: buff,
-        mimetype: mimetype,
-        ptt: isPtt
-      }, { quoted: mek }));
-      await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
-    } catch (err) {
-      console.error('Audio/Voice status save error:', err.message);
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: `❌ Failed to save status audio/voice: ${err.message}`
-      }, { quoted: mek }));
-    }
-  } else {
+    const ext = getExtension(buff);
+    const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
+    await fs.writeFile(filePath, buff);
+    const caption = quotedMessage.imageMessage.caption || '';
     await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-      text: '*Quoted status is not an image, video, text, voice, or audio*'
+      image: buff,
+      caption: caption
     }, { quoted: mek }));
+    await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+  } catch (err) {
+    console.error('Image status save error:', err.message);
+    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+      text: `❌ Failed to save status image: ${err.message}`
+    }, { quoted: mek }));
+  }
+} else if (quotedMessageType === 'videoMessage') {
+  try {
+    const nameJpg = getRandom('');
+    const buff = await withRetry(() => 
+      downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
+        logger: P({ level: 'silent' }),
+        reuploadRequest: conn.updateMediaMessage
+      }));
+    if (!Buffer.isBuffer(buff)) {
+      throw new Error('Invalid buffer received for video');
+    }
+    const ext = getExtension(buff);
+    const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
+    await fs.writeFile(filePath, buff);
+    const caption = quotedMessage.videoMessage.caption || '';
+    const buttonMessage = {
+      video: buff,
+      mimetype: 'video/mp4',
+      fileName: `${mek.key.id}.mp4`,
+      caption: caption,
+      headerType: 4
+    };
+    await withRetry(() => conn.sendMessage(mek.key.remoteJid, buttonMessage, { quoted: mek }));
+    await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+  } catch (err) {
+    console.error('Video status save error:', err.message);
+    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+      text: `❌ Failed to save status video: ${err.message}`
+    }, { quoted: mek }));
+  }
+} else if (quotedMessageType === 'conversation' || quotedMessageType === 'extendedTextMessage') {
+  try {
+    const text = quotedMessageType === 'conversation' ? quotedMessage.conversation : quotedMessage.extendedTextMessage.text;
+    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+      text: text
+    }, { quoted: mek }));
+  } catch (err) {
+    console.error('Text status save error:', err.message);
+    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+      text: `❌ Failed to save status text: ${err.message}`
+    }, { quoted: mek }));
+  }
+} else if (quotedMessageType === 'audioMessage') {
+  try {
+    const nameJpg = getRandom('');
+    const buff = await withRetry(() => 
+      downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
+        logger: P({ level: 'silent' }),
+        reuploadRequest: conn.updateMediaMessage
+      }));
+    if (!Buffer.isBuffer(buff)) {
+      throw new Error('Invalid buffer received for audio');
+    }
+    const ext = getExtension(buff);
+    const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
+    await fs.writeFile(filePath, buff);
+    const isPtt = quotedMessage.audioMessage.ptt || false; // Voice if ptt: true, otherwise audio
+    const mimetype = quotedMessage.audioMessage.mimetype || 'audio/mp4';
+    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+      audio: buff,
+      mimetype: mimetype,
+      ptt: isPtt
+    }, { quoted: mek }));
+    await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+  } catch (err) {
+    console.error('Audio/Voice status save error:', err.message);
+    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+      text: `❌ Failed to save status audio/voice: ${err.message}`
+    }, { quoted: mek }));
+  }
+} else {
+  await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
+    text: '*Quoted status is not an image, video, text, voice, or audio*'
+  }, { quoted: mek }));
 }
 return;
         }        // Existing auto-reply logic
@@ -1325,7 +1259,7 @@ return;
     return conn;
   } catch (err) {
     console.error('WhatsApp connection error:', err.message);
-    setTimeout(connectToWA, 10000);
+    setTimeout(connectToWA, 5000);
   }
 }
 
