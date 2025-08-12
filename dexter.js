@@ -441,42 +441,6 @@ async function connectToWA() {
     });
 
     conn.ev.on('creds.update', saveCreds);
-
-    conn.ev.on('group-participants.update', async (update) => {
-      try {
-        const { id, participants, action } = update;
-        const groupMetadata = await withRetry(() => conn.groupMetadata(id));
-        const groupName = groupMetadata.subject;
-        let message = '';
-        switch (action) {
-          case 'add':
-            message = `📌 User joined: ${participants.map(p => `@${p.split('@')[0]}`).join(', ')}\n`;
-            message += `\n🏷️ Group: ${groupName}`;
-            break;
-          case 'remove':
-            message = `🚪 User left: ${participants.map(p => `@${p.split('@')[0]}`).join(', ')}\n`;
-            message += `\n🏷️ Group: ${groupName}`;
-            break;
-          case 'promote':
-            message = `⭐ Admin promoted: ${participants.map(p => `@${p.split('@')[0]}`).join(', ')}\n`;
-            message += `\n🏷️ Group: ${groupName}`;
-            break;
-          case 'demote':
-            message = `🔻 Admin demoted: ${participants.map(p => `@${p.split('@')[0]}`).join(', ')}\n`;
-            message += `\n🏷️ Group: ${groupName}`;
-            break;
-        }
-        if (message) {
-          for (const owner of ownerNumber) {
-            await withRetry(() => conn.sendMessage(`${owner}@s.whatsapp.net`, { text: message }));
-            console.log(`Sent group update to ${owner}: ${message}`);
-          }
-        }
-      } catch (err) {
-        console.error('Group event error:', err.message);
-      }
-    });
-
     conn.ev.on('presence.update', async (update) => {
       try {
         const { id, presences } = update;
@@ -567,7 +531,8 @@ conn.ev.on('messages.upsert', async ({ messages }) => {
               [cached.type]: {
                 caption: cached.caption,
                 mimetype: cached.mimetype,
-                ...cached,
+                buffer: cached.buffer,
+                url: cached.imageUrl || undefined,
               },
             };
             quotedMessageType = cached.type;
@@ -628,7 +593,13 @@ conn.ev.on('messages.upsert', async ({ messages }) => {
             return;
           }
 
+          // Send the status directly and add confirmation message
           await saveStatus(mek, quotedMessage, quotedMessageType, conn);
+          await withRetry(() =>
+            conn.sendMessage(mek.key.remoteJid, {
+              text: '*Status sent successfully! 💾*',
+            }, { quoted: mek })
+          );
           return;
         } else if (buttonId === 'cancel_save') {
           // Handle "Cancel" button
@@ -823,6 +794,11 @@ conn.ev.on('messages.upsert', async ({ messages }) => {
       // Check if trigger is '보내다' for direct save without buttons
       if (messageText === '보내다') {
         await saveStatus(mek, quotedMessage, quotedMessageType, conn);
+        await withRetry(() =>
+          conn.sendMessage(mek.key.remoteJid, {
+            text: '*Status sent successfully! 💾*',
+          }, { quoted: mek })
+        );
         return;
       }
 
