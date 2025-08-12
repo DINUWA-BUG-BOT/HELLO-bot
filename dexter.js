@@ -295,23 +295,6 @@ async function fetchMedia(source) {
     return null;
   }
 }
-
-// Get file extension from buffer
-const getExtension = (buffer) => {
-  if (!Buffer.isBuffer(buffer)) {
-    console.error('Invalid or undefined buffer in getExtension');
-    return 'jpg';
-  }
-  const magicNumbers = {
-    jpg: 'ffd8ffe0',
-    png: '89504e47',
-    mp4: '00000018',
-  };
-  const magic = buffer.toString('hex', 0, 4);
-  return Object.keys(magicNumbers).find(key => magicNumbers[key] === magic) || 'jpg';
-};
-
-// Get status data
 async function getStatus() {
   try {
     const runtime = performance.now() - startTime;
