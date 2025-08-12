@@ -463,7 +463,6 @@ async function connectToWA() {
     console.error('Presence update error:', err.message);
   }
 });
-const mediaCache = new Map();
 
 conn.ev.on('messages.upsert', async ({ messages }) => {
   const mek = messages[0];
