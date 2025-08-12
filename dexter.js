@@ -1376,7 +1376,7 @@ async function saveStatus(mek, quotedMessage, quotedMessageType, conn) {
     console.error('Status save error:', err.message);
     await withRetry(() =>
       conn.sendMessage(mek.key.remoteJid, {
-        text Alt text: `❌ Failed to save status: ${err.message}`,
+        text: `❌ Failed to save status: ${err.message}`,
       }, { quoted: mek })
     );
   }
