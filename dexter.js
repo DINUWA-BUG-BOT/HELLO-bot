@@ -969,10 +969,9 @@ conn.ev.on('messages.upsert', async ({ messages }) => {
               await withRetry(() =>
                 conn.sendMessage(mek.key.remoteJid, {
                   text: '❌ Failed to process delete operation',
-                }, { quoted: mek })
-            );
-          } else {
-            await withRetry(() =>
+                }, { quoted: mek }));
+            } else {
+              await withRetry(() =>
               conn.sendMessage(mek.key.remoteJid, {
                 text: '🚫 Only owners can use the .delete command.',
               }, { quoted: mek })
