@@ -442,29 +442,28 @@ async function connectToWA() {
 
     conn.ev.on('creds.update', saveCreds);
     conn.ev.on('presence.update', async (update) => {
-      try {
-        const { id, presences } = update;
-        for (const [participant, presence] of Object.entries(presences)) {
-          console.log(`📶 ${participant} is now ${presence.lastKnownPresence}`);
-          await pool.query(
-            `INSERT INTO presence_updates (participant, presence_status, timestamp)
-             VALUES ($1, $2, $3)`,
-            [participant, presence.lastKnownPresence, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' })]
-          );
+  try {
+    const { id, presences } = update;
+    for (const [participant, presence] of Object.entries(presences)) {
+      await pool.query(
+        `INSERT INTO presence_updates (participant, presence_status, timestamp)
+         VALUES ($1, $2, $3)`,
+        [participant, presence.lastKnownPresence, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' })]
+      );
 
-          // Check if recording is enabled with auto_status
-          const recordingSettings = await pool.query(`SELECT enabled, auto_status FROM recording_settings ORDER BY id DESC LIMIT 1`);
-          if (recordingSettings.rows.length > 0 && recordingSettings.rows[0].enabled && recordingSettings.rows[0].auto_status) {
-            const presenceStatus = presence.lastKnownPresence === 'composing' ? 'composing' :
-                                   presence.lastKnownPresence === 'recording' ? 'recording' : 'available';
-            await withRetry(() => conn.sendPresenceUpdate(presenceStatus, id));
-            console.log(`Auto-updated presence to ${presenceStatus} for ${id}`);
-          }
-        }
-      } catch (err) {
-        console.error('Presence update error:', err.message);
+      // Check if recording is enabled with auto_status
+      const recordingSettings = await pool.query(`SELECT enabled, auto_status FROM recording_settings ORDER BY id DESC LIMIT 1`);
+      if (recordingSettings.rows.length > 0 && recordingSettings.rows[0].enabled && recordingSettings.rows[0].auto_status) {
+        const presenceStatus = presence.lastKnownPresence === 'composing' ? 'composing' :
+                               presence.lastKnownPresence === 'recording' ? 'recording' : 'available';
+        await withRetry(() => conn.sendPresenceUpdate(presenceStatus, id));
       }
-    });
+    }
+  } catch (err) {
+    console.error('Presence update error:', err.message);
+  }
+});
+
 
 conn.ev.on('messages.upsert', async ({ messages }) => {
   const mek = messages[0];
