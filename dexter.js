@@ -524,788 +524,857 @@ async function connectToWA() {
     });
 
     conn.ev.on('messages.upsert', async ({ messages }) => {
-      const mek = messages[0];
-      if (!mek.message) return;
+  const mek = messages[0];
+  if (!mek.message) return;
 
+  try {
+    // Show recording presence if enabled
+    const recordingSettings = await pool.query(`SELECT enabled FROM recording_settings ORDER BY id DESC LIMIT 1`);
+    if (recordingSettings.rows.length > 0 && recordingSettings.rows[0].enabled) {
+      await conn.sendPresenceUpdate('recording', mek.key.remoteJid);
+    }
+
+    if (mek.key.remoteJid === 'status@broadcast' && config.AUTO_STATUS_SEEN === true) {
+      await withRetry(() => conn.readMessages([mek.key]));
+      return;
+    }
+
+    let messageContent = mek.message;
+    let messageType = getContentType(messageContent);
+    let imageUrl = null;
+
+    if (messageType === 'ephemeralMessage') {
+      messageContent = messageContent.ephemeralMessage.message;
+      messageType = getContentType(messageContent);
+    }
+    if (messageType === 'viewOnceMessageV2') {
+      messageContent = messageContent.viewOnceMessageV2.message;
+      messageType = getContentType(messageContent);
+    }
+
+    let messageText = '';
+    if (messageType === 'conversation') {
+      messageText = messageContent.conversation;
+    } else if (messageType === 'extendedTextMessage') {
+      messageText = messageContent.extendedTextMessage.text;
+    } else if (['imageMessage', 'videoMessage', 'audioMessage'].includes(messageType)) {
       try {
-        // Show recording presence if enabled
-        const recordingSettings = await pool.query(`SELECT enabled FROM recording_settings ORDER BY id DESC LIMIT 1`);
-        if (recordingSettings.rows.length > 0 && recordingSettings.rows[0].enabled) {
-          await conn.sendPresenceUpdate('recording', mek.key.remoteJid);
+        const buffer = await withRetry(() =>
+          downloadMediaMessage(mek, 'buffer', {}, {
+            logger: P({ level: 'silent' }),
+            reuploadRequest: conn.updateMediaMessage,
+          })
+        );
+        if (messageType === 'imageMessage') {
+          imageUrl = await uploadToImgbb(buffer);
         }
-
-        if (mek.key.remoteJid === 'status@broadcast' && config.AUTO_STATUS_SEEN === true) {
-          await withRetry(() => conn.readMessages([mek.key]));
-          return;
-        }
-
-        let messageContent = mek.message;
-        let messageType = getContentType(messageContent);
-        let imageUrl = null;
-
-        if (messageType === 'ephemeralMessage') {
-          messageContent = messageContent.ephemeralMessage.message;
-          messageType = getContentType(messageContent);
-        }
-        if (messageType === 'viewOnceMessageV2') {
-          messageContent = messageContent.viewOnceMessageV2.message;
-          messageType = getContentType(messageContent);
-        }
-
-        let messageText = '';
-        if (messageType === 'conversation') {
-          messageText = messageContent.conversation;
-        } else if (messageType === 'extendedTextMessage') {
-          messageText = messageContent.extendedTextMessage.text;
-        } else if (['imageMessage', 'videoMessage', 'audioMessage'].includes(messageType)) {
-          try {
-            const buffer = await withRetry(() => 
-              downloadMediaMessage(mek, 'buffer', {}, {
-                logger: P({ level: 'silent' }),
-                reuploadRequest: conn.updateMediaMessage
-              }));
-            if (messageType === 'imageMessage') {
-              imageUrl = await uploadToImgbb(buffer);
-            }
-            messageText = JSON.stringify({
-              caption: messageContent[messageType].caption || '',
-              mimetype: messageContent[messageType].mimetype
-            });
-            mediaCache.set(mek.key.id, {
-              type: messageType,
-              buffer,
-              caption: messageContent[messageType].caption || '',
-              mimetype: messageContent[messageType].mimetype,
-              imageUrl,
-              timestamp: Date.now()
-            });
-            const now = Date.now();
-            for (const [id, { timestamp }] of mediaCache) {
-              if (now - timestamp > 60 * 60 * 1000) {
-                mediaCache.delete(id);
-              }
-            }
-          } catch (err) {
-            console.error('Media caching error:', {
-              messageId: mek.key.id,
-              messageType,
-              error: err.message,
-              stack: err.stack
-            });
-            messageText = JSON.stringify({
-              caption: messageContent[messageType].caption || '',
-              mimetype: messageContent[messageType].mimetype
-            });
+        messageText = JSON.stringify({
+          caption: messageContent[messageType].caption || '',
+          mimetype: messageContent[messageType].mimetype,
+        });
+        mediaCache.set(mek.key.id, {
+          type: messageType,
+          buffer,
+          caption: messageContent[messageType].caption || '',
+          mimetype: messageContent[messageType].mimetype,
+          imageUrl,
+          timestamp: Date.now(),
+        });
+        const now = Date.now();
+        for (const [id, { timestamp }] of mediaCache) {
+          if (now - timestamp > 60 * 60 * 1000) {
+            mediaCache.delete(id);
           }
-        } else {
-          messageText = JSON.stringify(messageContent);
         }
-
-        const sriLankaTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' });
-
-        let autoReplySent = false;
-        try {
-          await pool.query(
-            `INSERT INTO messages 
-            (message_id, sender_jid, remote_jid, message_text, message_type, image_url, sri_lanka_time, auto_reply_sent)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [
-              mek.key.id,
-              mek.key.participant || mek.key.remoteJid,
-              mek.key.remoteJid,
-              messageText,
-              messageType,
-              imageUrl,
-              sriLankaTime,
-              autoReplySent
-            ]
-          );
-        } catch (err) {
-          console.error('Database insert error:', err.message);
-          return;
-        }
-
-        if (config.READ_MESSAGE === true) {
-          await withRetry(() => conn.readMessages([mek.key]));
-          console.log(`Marked message from ${mek.key.remoteJid} as read`);
-        }
-
-        const senderJid = mek.key.participant || mek.key.remoteJid;
-        const restrictedNumber = '94789958225@s.whatsapp.net';
-        const pushName = mek.pushName || 'Unknown';
-        const userId = senderJid.split('@')[0];
-        let senderDpUrl = 'https://i.imgur.com/default-profile.jpg';
-        try {
-          senderDpUrl = await conn.profilePictureUrl(senderJid, 'image') || senderDpUrl;
-        } catch (err) {
-          console.warn(`Failed to fetch profile picture for ${senderJid}: ${err.message}`);
-        }
-
-        // Handle dexter-is-friendly message
-        if (messageText.toLowerCase() === 'dexter-is-friendly' && !mek.key.fromMe) {
-          try {
-            const phoneNumber = senderJid.split('@')[0];
-
-            // Check if the phone number already exists
-            const existingContact = await pool.query(
-              `SELECT display_name FROM friendly_contacts WHERE phone_number = $1`,
-              [phoneNumber]
-            );
-
-            if (existingContact.rows.length === 0) {
-              let displayName = pushName;
-              if (!pushName || pushName === 'Unknown') {
-                // Count existing DEXTER ID SVC entries to generate the next number
-                const countResult = await pool.query(
-                  `SELECT COUNT(*) FROM friendly_contacts WHERE display_name LIKE 'DEXTER ID SVC%'`
-                );
-                const count = parseInt(countResult.rows[0].count) + 1;
-                displayName = `DEXTER ID SVC ${count}`;
-              }
-
-              // Insert into friendly_contacts table
-              await pool.query(
-                `INSERT INTO friendly_contacts (phone_number, display_name, created_at)
-                 VALUES ($1, $2, $3)`,
-                [phoneNumber, displayName, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' })]
-              );
-              console.log(`Stored contact: ${phoneNumber} as ${displayName}`);
-
-              // Send confirmation to the sender
-              await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                text: `✅ Your contact has been saved as "${displayName}"!`
-              }, { quoted: mek }));
-            } else {
-              // Contact already exists
-              await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                text: `ℹ️ Your contact is already saved as "${existingContact.rows[0].display_name}"!`
-              }, { quoted: mek }));
-            }
-          } catch (err) {
-            console.error('Friendly contact storage error:', err.message);
-            await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-              text: `❌ Failed to save contact: ${err.message}`
-            }, { quoted: mek }));
-          }
-          return; // Exit to prevent further processing
-        }
-
-        // Handle status saving commands
-        // Handle status saving commands
-const statusTriggers = [
-  'send', 'Send', 'Seve', 'Ewpm', 'ewpn', 'Dapan', 'dapan',
-  'oni', 'Oni', 'save', 'Save', 'ewanna', 'Ewanna', 'ewam',
-  'Ewam', 'sv', 'Sv', '보내다', 'එවම්න'
-];
-
-if (messageText && statusTriggers.includes(messageText)) {
-  if (!mek.message.extendedTextMessage || !mek.message.extendedTextMessage.contextInfo.quotedMessage) {
-    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-      text: '*TNX FOR SAVE 💙*'
-    }, { quoted: mek }));
-    return;
-  }
-
-  const quotedMessage = mek.message.extendedTextMessage.contextInfo.quotedMessage;
-  const isStatus = mek.message.extendedTextMessage.contextInfo.remoteJid === 'status@broadcast';
-  
-  if (!isStatus) {
-    await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-      text: '*TNX FOR SAVE*'
-    }, { quoted: mek }));
-    return;
-  }
-
-  const quotedMessageType = getContentType(quotedMessage);
-
-  // Function to handle saving logic for image, video, text, voice/audio
-  const saveStatus = async () => {
-    if (quotedMessageType === 'imageMessage') {
-      try {
-        const nameJpg = getRandom('');
-        const buff = await withRetry(() => 
-          downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
-            logger: P({ level: 'silent' }),
-            reuploadRequest: conn.updateMediaMessage
-          }));
-        if (!Buffer.isBuffer(buff)) {
-          throw new Error('Invalid buffer received for image');
-        }
-        const ext = getExtension(buff);
-        const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
-        await fs.writeFile(filePath, buff);
-        const caption = quotedMessage.imageMessage.caption || '';
-        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-          image: buff,
-          caption: caption
-        }, { quoted: mek }));
-        await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
       } catch (err) {
-        console.error('Image status save error:', err.message);
-        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-          text: `❌ Failed to save status image: ${err.message}`
-        }, { quoted: mek }));
-      }
-    } else if (quotedMessageType === 'videoMessage') {
-      try {
-        const nameJpg = getRandom('');
-        const buff = await withRetry(() => 
-          downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
-            logger: P({ level: 'silent' }),
-            reuploadRequest: conn.updateMediaMessage
-          }));
-        if (!Buffer.isBuffer(buff)) {
-          throw new Error('Invalid buffer received for video');
-        }
-        const ext = getExtension(buff);
-        const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
-        await fs.writeFile(filePath, buff);
-        const caption = quotedMessage.videoMessage.caption || '';
-        const buttonMessage = {
-          video: buff,
-          mimetype: 'video/mp4',
-          fileName: `${mek.key.id}.mp4`,
-          caption: caption,
-          headerType: 4
-        };
-        await withRetry(() => conn.sendMessage(mek.key.remoteJid, buttonMessage, { quoted: mek }));
-        await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
-      } catch (err) {
-        console.error('Video status save error:', err.message);
-        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-          text: `❌ Failed to save status video: ${err.message}`
-        }, { quoted: mek }));
-      }
-    } else if (quotedMessageType === 'conversation' || quotedMessageType === 'extendedTextMessage') {
-      try {
-        const text = quotedMessageType === 'conversation' ? quotedMessage.conversation : quotedMessage.extendedTextMessage.text;
-        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-          text: text
-        }, { quoted: mek }));
-      } catch (err) {
-        console.error('Text status save error:', err.message);
-        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-          text: `❌ Failed to save status text: ${err.message}`
-        }, { quoted: mek }));
-      }
-    } else if (quotedMessageType === 'audioMessage') {
-      try {
-        const nameJpg = getRandom('');
-        const buff = await withRetry(() => 
-          downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
-            logger: P({ level: 'silent' }),
-            reuploadRequest: conn.updateMediaMessage
-          }));
-        if (!Buffer.isBuffer(buff)) {
-          throw new Error('Invalid buffer received for audio');
-        }
-        const ext = getExtension(buff);
-        const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
-        await fs.writeFile(filePath, buff);
-        const isPtt = quotedMessage.audioMessage.ptt || false;
-        const mimetype = quotedMessage.audioMessage.mimetype || 'audio/mp4';
-        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-          audio: buff,
-          mimetype: mimetype,
-          ptt: isPtt
-        }, { quoted: mek }));
-        await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
-      } catch (err) {
-        console.error('Audio/Voice status save error:', err.message);
-        await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-          text: `❌ Failed to save status audio/voice: ${err.message}`
-        }, { quoted: mek }));
+        console.error('Media caching error:', {
+          messageId: mek.key.id,
+          messageType,
+          error: err.message,
+          stack: err.stack,
+        });
+        messageText = JSON.stringify({
+          caption: messageContent[messageType].caption || '',
+          mimetype: messageContent[messageType].mimetype,
+        });
       }
     } else {
-      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-        text: '*Quoted status is not an image, video, text, voice, or audio*'
-      }, { quoted: mek }));
+      messageText = JSON.stringify(messageContent);
     }
-  };
 
-  // Check if trigger is '보내다' for direct save without buttons
-  if (messageText === '보내다') {
-    await saveStatus();
-    return;
-  }
+    const sriLankaTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' });
 
-  // For other triggers, show confirmation buttons
-  // Randomly select language for the prompt (English or Sinhala)
-  const languages = [
-    { lang: 'English', text: 'Do you want to save this status?', yes: 'Yes', no: 'No' },
-    { lang: 'Sinhala', text: '*මෙම STATUS එක  ඕනිද එපාද ඔනෙමද 😪*', yes: 'ඔනිමයි 🤍', no: 'ඔනි නැ 😮‍💨' }
-  ];
-  const selectedLang = languages[Math.floor(Math.random() * languages.length)];
-
-  // Prepare button message with copy caption option if applicable
-  const caption = (quotedMessageType === 'imageMessage' && quotedMessage.imageMessage.caption) ||
-                  (quotedMessageType === 'videoMessage' && quotedMessage.videoMessage.caption) || '';
-
-  const buttons = [
-    {
-      name: 'single_select',
-      buttonParamsJson: JSON.stringify({
-        title: selectedLang.text,
-        sections: [
-          {
-            rows: [
-              { header: '', title: selectedLang.yes, description: 'Save the status', id: 'save_status' },
-              { header: '', title: selectedLang.no, description: 'Cancel', id: 'cancel_save' }
-            ]
-          }
-        ]
-      })
+    let autoReplySent = false;
+    try {
+      await pool.query(
+        `INSERT INTO messages 
+        (message_id, sender_jid, remote_jid, message_text, message_type, image_url, sri_lanka_time, auto_reply_sent)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [mek.key.id, mek.key.participant || mek.key.remoteJid, mek.key.remoteJid, messageText, messageType, imageUrl, sriLankaTime, autoReplySent]
+      );
+    } catch (err) {
+      console.error('Database insert error:', err.message);
+      return;
     }
-  ];
 
-  // Add copy caption button if there is a caption
-  if (caption) {
-    buttons.push({
-      name: 'cta_copy',
-      buttonParamsJson: JSON.stringify({
-        display_text: '𝐂𝐎𝐏𝐘 𝐂𝐀𝐏𝐓𝐈𝐎𝐍 ❏',
-        id: 'copy_caption',
-        copy_code: caption
-      })
-    });
-  }
+    if (config.READ_MESSAGE === true) {
+      await withRetry(() => conn.readMessages([mek.key]));
+      console.log(`Marked message from ${mek.key.remoteJid} as read`);
+    }
 
-  // Send the interactive button message
-  await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-    text: selectedLang.text,
-    footer: '☿ ᴅᴇxᴛᴇʀ - ᴅᴇᴠ ☿',
-    interactiveButtons: buttons
-  }, { quoted: mek }));
-}
-return;
-        }        // Existing auto-reply logic
-        if (
-          messageText &&
-          !messageText.startsWith('.') &&
-          !mek.key.fromMe &&
-          senderJid !== restrictedNumber &&
-          mek.key.remoteJid !== restrictedNumber
-        ) {
-          for (const rule of replyRules.rules) {
-            let isMatch = false;
-            if (rule.pattern) {
-              try {
-                const regex = new RegExp(rule.pattern, 'i');
-                isMatch = regex.test(messageText);
-              } catch (err) {
-                console.error(`Invalid regex pattern in rule "${rule.trigger}": ${err.message}`);
-                isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
-              }
-            } else {
-              isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
-            }
+    const senderJid = mek.key.participant || mek.key.remoteJid;
+    const restrictedNumber = '94789958225@s.whatsapp.net';
+    const pushName = mek.pushName || 'Unknown';
+    const userId = senderJid.split('@')[0];
+    let senderDpUrl = 'https://i.imgur.com/default-profile.jpg';
+    try {
+      senderDpUrl = (await conn.profilePictureUrl(senderJid, 'image')) || senderDpUrl;
+    } catch (err) {
+      console.warn(`Failed to fetch profile picture for ${senderJid}: ${err.message}`);
+    }
 
-            if (isMatch) {
-              autoReplySent = true;
-              await pool.query(
-                `UPDATE messages SET auto_reply_sent = TRUE WHERE message_id = $1`,
-                [mek.key.id]
-              );
-              for (const response of rule.response) {
-                if (response.delay) {
-                  await new Promise(resolve => setTimeout(resolve, response.delay));
-                }
-                const contextInfo = {
-                  quotedMessage: mek.message,
-                  forwardingScore: 999,
-                  isForwarded: true,
-                  forwardedNewsletterMessageInfo: {
-                    newsletterJid: '120363286758767913@newsletter',
-                    newsletterName: 'JOIN CHANNEL 👋',
-                    serverMessageId: 143
-                  }
-                };
-                let content = response.content;
-                let caption = response.caption;
-                let url = response.url;
-                if (content) {
-                  content = content.replace('${pushname}', pushName)
-                                  .replace('${userid}', userId)
-                                  .replace('${senderdpurl}', senderDpUrl);
-                }
-                if (caption) {
-                  caption = caption.replace('${pushname}', pushName)
-                                  .replace('${userid}', userId)
-                                  .replace('${senderdpurl}', senderDpUrl);
-                }
-                if (url) {
-                  url = url.replace('${pushname}', pushName)
-                          .replace('${userid}', userId)
-                          .replace('${senderdpurl}', senderDpUrl);
-                }
-                switch (response.type) {
-                  case 'text':
-                    await withRetry(() => conn.sendMessage(mek.key.remoteJid, { 
-                      text: content,
-                      contextInfo
-                    }, { quoted: mek }));
-                    break;
-                  case 'image':
-                    const imageBuffer = await fetchMedia(url);
-                    if (imageBuffer) {
-                      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                        image: imageBuffer,
-                        caption: caption || '',
-                        contextInfo
-                      }, { quoted: mek }));
-                    }
-                    break;
-                  case 'video':
-                    const videoBuffer = await fetchMedia(url);
-                    if (videoBuffer) {
-                      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                        video: videoBuffer,
-                        caption: caption || '',
-                        contextInfo
-                      }, { quoted: mek }));
-                    }
-                    break;
-                  case 'voice':
-                    const voiceBuffer = await fetchMedia(url);
-                    if (voiceBuffer) {
-                      await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                        audio: voiceBuffer,
-                        mimetype: 'audio/mpeg',
-                        ptt: true,
-                        contextInfo
-                      }, { quoted: mek }));
-                    }
-                    break;
-                }
-              }
-              break;
-            }
+    // Handle dexter-is-friendly message
+    if (messageText.toLowerCase() === 'dexter-is-friendly' && !mek.key.fromMe) {
+      try {
+        const phoneNumber = senderJid.split('@')[0];
+
+        // Check if the phone number already exists
+        const existingContact = await pool.query(
+          `SELECT display_name FROM friendly_contacts WHERE phone_number = $1`,
+          [phoneNumber]
+        );
+
+        if (existingContact.rows.length === 0) {
+          let displayName = pushName;
+          if (!pushName || pushName === 'Unknown') {
+            const countResult = await pool.query(
+              `SELECT COUNT(*) FROM friendly_contacts WHERE display_name LIKE 'DEXTER ID SVC%'`
+            );
+            const count = parseInt(countResult.rows[0].count) + 1;
+            displayName = `DEXTER ID SVC ${count}`;
           }
-        }
 
-        // Command handling
-        if (messageText && messageText.startsWith('.')) {
-          const [command, ...args] = messageText.split(' ');
+          await pool.query(
+            `INSERT INTO friendly_contacts (phone_number, display_name, created_at)
+             VALUES ($1, $2, $3)`,
+            [phoneNumber, displayName, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' })]
+          );
+          console.log(`Stored contact: ${phoneNumber} as ${displayName}`);
 
-          switch (command.toLowerCase()) {
-            case '.ping':
-              const pingTime = performance.now();
-              await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                text: `🏓 Pong! Response time: ${Math.round(performance.now() - pingTime)}ms`
-              }, { quoted: mek }));
-              break;
-
-            case '.runtime':
-              const runtime = performance.now() - startTime;
-              const seconds = Math.floor(runtime / 1000);
-              const minutes = Math.floor(seconds / 60);
-              const hours = Math.floor(minutes / 60);
-              await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                text: `⏰ Bot Runtime: ${hours}h ${minutes % 60}m ${seconds % 60}s`
-              }, { quoted: mek }));
-              break;
-
-            case '.reload':
-              if (ownerNumber.includes(senderJid.split('@')[0])) {
-                const result = await reloadJsonFile();
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, { text: result }, { quoted: mek }));
-              } else {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '🚫 Only owners can use the .reload command.'
-                }, { quoted: mek }));
-              }
-              break;
-
-            case '.delete':
-              if (ownerNumber.includes(senderJid.split('@')[0])) {
-                const clear = args[0]?.toLowerCase() === 'clear';
-                const result = await handleDelete(clear);
-                if (clear && !result.error) {
-                  await withRetry(() => conn.sendMessage(mek.key.remoteJid, { 
-                    text: '✅ Database cleared successfully'
-                  }, { quoted: mek }));
-                } else if (!clear && result.deletedMessages) {
-                  const message = result.deletedMessages.length > 0
-                    ? `🗑️ Found ${result.deletedMessages.length} deleted messages with images:\n` +
-                      result.deletedMessages.map(m => 
-                        `ID: ${m.message_id}\nSender: ${m.sender_jid}\nImage: ${m.image_url}\nDeleted By: ${m.deleted_by}\nDeleted At: ${m.sri_lanka_time}`
-                      ).join('\n\n')
-                    : '🗑️ No deleted messages with images found.';
-                  await withRetry(() => conn.sendMessage(mek.key.remoteJid, { text: message }, { quoted: mek }));
-                } else {
-                  await withRetry(() => conn.sendMessage(mek.key.remoteJid, { 
-                    text: '❌ Failed to process delete operation'
-                  }, { quoted: mek }));
-                }
-              } else {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '🚫 Only owners can use the .delete command.'
-                }, { quoted: mek }));
-              }
-              break;
-
-            case '.key':
-              if (!mek.message.extendedTextMessage || !mek.message.extendedTextMessage.contextInfo.quotedMessage) {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '*Please quote a message to get its key*'
-                }, { quoted: mek }));
-                return;
-              }
-              const quotedKey = {
-                id: mek.message.extendedTextMessage.contextInfo.stanzaId,
-                remoteJid: mek.message.extendedTextMessage.contextInfo.remoteJid || mek.key.remoteJid,
-                participant: mek.message.extendedTextMessage.contextInfo.participant || mek.key.participant
-              };
-              await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                text: `🔑 *Message Key:*\n\n\`\`\`\n${JSON.stringify(quotedKey, null, 2)}\n\`\`\``
-              }, { quoted: mek }));
-              break;
-
-            case '.editor':
-              if (!mek.message.extendedTextMessage || !mek.message.extendedTextMessage.contextInfo.quotedMessage) {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '*Please quote a message to start the auto-editor*'
-                }, { quoted: mek }));
-                return;
-              }
-              try {
-                const editKey = {
-                  id: mek.message.extendedTextMessage.contextInfo.stanzaId,
-                  remoteJid: mek.message.extendedTextMessage.contextInfo.remoteJid || mek.key.remoteJid,
-                  participant: mek.message.extendedTextMessage.contextInfo.participant || mek.key.participant
-                };
-
-                // Progress bar stages
-                const progressStages = [
-                  "《 █▒▒▒▒▒▒▒▒▒▒▒》10%",
-                  "《 ████▒▒▒▒▒▒▒▒》30%",
-                  "《 ███████▒▒▒▒▒》50%",
-                  "《 ██████████▒▒》80%",
-                  "《 ████████████》100%"
-                ];
-
-                // Send initial message to be edited
-                const response = await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `📡 *Processing Report...*\n${progressStages[0]}\n⏳ Time Remaining: 2:00`,
-                  contextInfo: {
-                    forwardingScore: 999,
-                    isForwarded: true
-                  }
-                }, { quoted: mek }));
-
-                // Update every 24 seconds for 2 minutes (120 seconds / 5 stages = 24 seconds per stage)
-                for (let i = 1; i < progressStages.length; i++) {
-                  await new Promise(resolve => setTimeout(resolve, 24000));
-                  const remainingSeconds = 120 - (i * 24);
-                  const minutes = Math.floor(remainingSeconds / 60);
-                  const seconds = remainingSeconds % 60;
-                  await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                    text: `📡 *Processing Report...*\n${progressStages[i]}\n⏳ Time Remaining: ${minutes}:${seconds.toString().padStart(2, '0')}`,
-                    edit: response.key
-                  }));
-                }
-
-                // Final message after 24 more seconds (total 120 seconds)
-                await new Promise(resolve => setTimeout(resolve, 24000));
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `✅ *𝚁𝙴𝙿𝙾𝚁𝚃 𝚂𝙴𝙽𝙳 𝚃𝙾 𝚃𝙷𝙴 𝙾𝚆𝙽𝙴𝚁 🖥️...*`,
-                  edit: response.key
-                }));
-              } catch (err) {
-                console.error('Editor command error:', err.message);
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `❌ Failed to execute editor: ${err.message}`
-                }, { quoted: mek }));
-              }
-              break;
-
-            case '.alwaysonline':
-              if (!ownerNumber.includes(senderJid.split('@')[0])) {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '🚫 Only owners can use the .alwaysonline command.'
-                }, { quoted: mek }));
-                break;
-              }
-
-              const action = args[0]?.toLowerCase();
-              if (!['on', 'off'].includes(action)) {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '⚠️ Usage: .alwaysonline on|off'
-                }, { quoted: mek }));
-                break;
-              }
-
-              try {
-                const enabled = action === 'on';
-                await pool.query(
-                  `INSERT INTO always_online_settings (enabled, modified_at, modified_by)
-                   VALUES ($1, $2, $3)`,
-                  [enabled, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' }), senderJid]
-                );
-
-                if (enabled) {
-                  await withRetry(() => conn.sendPresenceUpdate('available', mek.key.remoteJid));
-                  console.log('Always online enabled');
-                } else {
-                  await withRetry(() => conn.sendPresenceUpdate('unavailable', mek.key.remoteJid));
-                  console.log('Always online disabled');
-                }
-
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `✅ Always online ${enabled ? 'enabled' : 'disabled'}`
-                }, { quoted: mek }));
-              } catch (err) {
-                console.error('Always online command error:', err.message);
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `❌ Failed to toggle always online: ${err.message}`
-                }, { quoted: mek }));
-              }
-              break;
-
-            case '.recording':
-              if (!ownerNumber.includes(senderJid.split('@')[0])) {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '🚫 Only owners can use the .recording command.'
-                }, { quoted: mek }));
-                break;
-              }
-
-              const recordingAction = args[0]?.toLowerCase();
-              const autoStatus = args[1]?.toLowerCase() === 'auto';
-              if (!['on', 'off'].includes(recordingAction)) {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '⚠️ Usage: .recording on|off [auto]'
-                }, { quoted: mek }));
-                break;
-              }
-
-              try {
-                const enabled = recordingAction === 'on';
-                await pool.query(
-                  `INSERT INTO recording_settings (enabled, auto_status, modified_at, modified_by)
-                   VALUES ($1, $2, $3, $4)`,
-                  [enabled, autoStatus, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' }), senderJid]
-                );
-
-                if (enabled) {
-                  await withRetry(() => conn.sendPresenceUpdate(autoStatus ? 'composing' : 'recording', mek.key.remoteJid));
-                  console.log(`Recording presence ${autoStatus ? 'with auto status (composing/recording)' : ''} enabled`);
-                } else {
-                  await withRetry(() => conn.sendPresenceUpdate('unavailable', mek.key.remoteJid));
-                  console.log('Recording presence disabled');
-                }
-
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `✅ Recording presence ${enabled ? 'enabled' : 'disabled'}${autoStatus ? ' with auto status (composing/recording)' : ''}`
-                }, { quoted: mek }));
-              } catch (err) {
-                console.error('Recording command error:', err.message);
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `❌ Failed to toggle recording: ${err.message}`
-                }, { quoted: mek }));
-              }
-              break;
-
-            case '.last':
-              if (!ownerNumber.includes(senderJid.split('@')[0])) {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '🚫 Only owners can use the .last command.'
-                }, { quoted: mek }));
-                break;
-              }
-
-              const phoneNumber = args[0]?.replace(/[^0-9]/g, '');
-              if (!phoneNumber || !phoneNumber.match(/^\d{9,12}$/)) {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '⚠️ Usage: .last <phone_number> (e.g., .last 94789958225)'
-                }, { quoted: mek }));
-                break;
-              }
-
-              try {
-                const jid = `${phoneNumber}@s.whatsapp.net`;
-                await pool.query(
-                  `INSERT INTO number_specific_online (phone_number, enabled, modified_at, modified_by)
-                   VALUES ($1, $2, $3, $4)
-                   ON CONFLICT (phone_number) DO UPDATE 
-                   SET enabled = $2, modified_at = $3, modified_by = $4`,
-                  [jid, false, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' }), senderJid]
-                );
-
-                await withRetry(() => conn.sendPresenceUpdate('unavailable', jid));
-                console.log(`Always online disabled for ${jid}`);
-
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `✅ Always online disabled for ${phoneNumber}`
-                }, { quoted: mek }));
-              } catch (err) {
-                console.error('Last command error:', err.message);
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `❌ Failed to disable always online for ${phoneNumber}: ${err.message}`
-                }, { quoted: mek }));
-              }
-              break;
-
-            case '.vcf':
-              if (!ownerNumber.includes(senderJid.split('@')[0])) {
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: '🚫 Only owners can use the .vcf command.'
-                }, { quoted: mek }));
-                break;
-              }
-
-              try {
-                // Fetch all contacts
-                const { rows: contacts } = await pool.query(
-                  `SELECT phone_number, display_name FROM friendly_contacts ORDER BY created_at`
-                );
-
-                if (contacts.length === 0) {
-                  await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                    text: 'ℹ️ No contacts found in the database.'
-                  }, { quoted: mek }));
-                  break;
-                }
-
-                // Generate VCF content
-                let vcfContent = '';
-                contacts.forEach(contact => {
-                  vcfContent += `BEGIN:VCARD\n` +
-                                `VERSION:3.0\n` +
-                                `FN:${contact.display_name}\n` +
-                                `TEL;TYPE=CELL:${contact.phone_number}\n` +
-                                `END:VCARD\n`;
-                });
-
-                // Write VCF to a temporary file
-                const vcfFilePath = path.join(tempDir, `contacts_${getRandom()}.vcf`);
-                await fs.writeFile(vcfFilePath, vcfContent);
-
-                // Send VCF file
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  document: { url: vcfFilePath },
-                  mimetype: 'text/vcard',
-                  fileName: 'Friendly_Contacts.vcf',
-                  caption: `📋 Generated VCF with ${contacts.length} contacts`
-                }, { quoted: mek }));
-
-                // Clean up the file
-                await fs.unlink(vcfFilePath).catch(err => console.error('VCF file deletion error:', err.message));
-
-                console.log(`Sent VCF file with ${contacts.length} contacts to ${senderJid}`);
-              } catch (err) {
-                console.error('VCF command error:', err.message);
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, {
-                  text: `❌ Failed to generate VCF: ${err.message}`
-                }, { quoted: mek }));
-              }
-              break;
-          }
+          await withRetry(() =>
+            conn.sendMessage(mek.key.remoteJid, {
+              text: `✅ Your contact has been saved as "${displayName}"!`,
+            }, { quoted: mek })
+          );
+        } else {
+          await withRetry(() =>
+            conn.sendMessage(mek.key.remoteJid, {
+              text: `ℹ️ Your contact is already saved as "${existingContact.rows[0].display_name}"!`,
+            }, { quoted: mek })
+          );
         }
       } catch (err) {
-        console.error('Message processing error:', err.message);
+        console.error('Friendly contact storage error:', err.message);
+        await withRetry(() =>
+          conn.sendMessage(mek.key.remoteJid, {
+            text: `❌ Failed to save contact: ${err.message}`,
+          }, { quoted: mek })
+        );
       }
-    });
+      return;
+    }
+
+    // Handle status saving commands
+    const statusTriggers = [
+      'send', 'Send', 'Seve', 'Ewpm', 'ewpn', 'Dapan', 'dapan',
+      'oni', 'Oni', 'save', 'Save', 'ewanna', 'Ewanna', 'ewam',
+      'Ewam', 'sv', 'Sv', '보내다', 'එවම්න'
+    ];
+
+    if (messageText && statusTriggers.includes(messageText)) {
+      if (!mek.message.extendedTextMessage || !mek.message.extendedTextMessage.contextInfo.quotedMessage) {
+        await withRetry(() =>
+          conn.sendMessage(mek.key.remoteJid, {
+            text: '*TNX FOR SAVE 💙*',
+          }, { quoted: mek })
+        );
+        return;
+      }
+
+      const quotedMessage = mek.message.extendedTextMessage.contextInfo.quotedMessage;
+      const isStatus = mek.message.extendedTextMessage.contextInfo.remoteJid === 'status@broadcast';
+
+      if (!isStatus) {
+        await withRetry(() =>
+          conn.sendMessage(mek.key.remoteJid, {
+            text: '*TNX FOR SAVE*',
+          }, { quoted: mek })
+        );
+        return;
+      }
+
+      const quotedMessageType = getContentType(quotedMessage);
+
+      // Function to handle saving logic for image, video, text, voice/audio
+      const saveStatus = async () => {
+        if (quotedMessageType === 'imageMessage') {
+          try {
+            const nameJpg = getRandom('');
+            const buff = await withRetry(() =>
+              downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
+                logger: P({ level: 'silent' }),
+                reuploadRequest: conn.updateMediaMessage,
+              })
+            );
+            if (!Buffer.isBuffer(buff)) {
+              throw new Error('Invalid buffer received for image');
+            }
+            const ext = getExtension(buff);
+            const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
+            await fs.writeFile(filePath, buff);
+            const caption = quotedMessage.imageMessage.caption || '';
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                image: buff,
+                caption: caption,
+              }, { quoted: mek })
+            );
+            await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+          } catch (err) {
+            console.error('Image status save error:', err.message);
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `❌ Failed to save status image: ${err.message}`,
+              }, { quoted: mek })
+            );
+          }
+        } else if (quotedMessageType === 'videoMessage') {
+          try {
+            const nameJpg = getRandom('');
+            const buff = await withRetry(() =>
+              downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
+                logger: P({ level: 'silent' }),
+                reuploadRequest: conn.updateMediaMessage,
+              })
+            );
+            if (!Buffer.isBuffer(buff)) {
+              throw new Error('Invalid buffer received for video');
+            }
+            const ext = getExtension(buff);
+            const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
+            await fs.writeFile(filePath, buff);
+            const caption = quotedMessage.videoMessage.caption || '';
+            const buttonMessage = {
+              video: buff,
+              mimetype: 'video/mp4',
+              fileName: `${mek.key.id}.mp4`,
+              caption: caption,
+              headerType: 4,
+            };
+            await withRetry(() => conn.sendMessage(mek.key.remoteJid, buttonMessage, { quoted: mek }));
+            await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+          } catch (err) {
+            console.error('Video status save error:', err.message);
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `❌ Failed to save status video: ${err.message}`,
+              }, { quoted: mek })
+            );
+          }
+        } else if (quotedMessageType === 'conversation' || quotedMessageType === 'extendedTextMessage') {
+          try {
+            const text = quotedMessageType === 'conversation' ? quotedMessage.conversation : quotedMessage.extendedTextMessage.text;
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: text,
+              }, { quoted: mek })
+            );
+          } catch (err) {
+            console.error('Text status save error:', err.message);
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `❌ Failed to save status text: ${err.message}`,
+              }, { quoted: mek })
+            );
+          }
+        } else if (quotedMessageType === 'audioMessage') {
+          try {
+            const nameJpg = getRandom('');
+            const buff = await withRetry(() =>
+              downloadMediaMessage({ message: quotedMessage }, 'buffer', {}, {
+                logger: P({ level: 'silent' }),
+                reuploadRequest: conn.updateMediaMessage,
+              })
+            );
+            if (!Buffer.isBuffer(buff)) {
+              throw new Error('Invalid buffer received for audio');
+            }
+            const ext = getExtension(buff);
+            const filePath = path.join(tempDir, `${nameJpg}.${ext}`);
+            await fs.writeFile(filePath, buff);
+            const isPtt = quotedMessage.audioMessage.ptt || false;
+            const mimetype = quotedMessage.audioMessage.mimetype || 'audio/mp4';
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                audio: buff,
+                mimetype: mimetype,
+                ptt: isPtt,
+              }, { quoted: mek })
+            );
+            await fs.unlink(filePath).catch(err => console.error('File deletion error:', err.message));
+          } catch (err) {
+            console.error('Audio/Voice status save error:', err.message);
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `❌ Failed to save status audio/voice: ${err.message}`,
+              }, { quoted: mek })
+            );
+          }
+        } else {
+          await withRetry(() =>
+            conn.sendMessage(mek.key.remoteJid, {
+              text: '*Quoted status is not an image, video, text, voice, or audio*',
+            }, { quoted: mek })
+          );
+        }
+      };
+
+      // Check if trigger is '보내다' for direct save without buttons
+      if (messageText === '보내다') {
+        await saveStatus();
+        return;
+      }
+
+      // For other triggers, show confirmation buttons
+      const languages = [
+        { lang: 'English', text: 'Do you want to save this status?', yes: 'Yes', no: 'No' },
+        { lang: 'Sinhala', text: '*මෙම STATUS එක  ඕනිද එපාද ඔනෙමද 😪*', yes: 'ඔනිමයි 🤍', no: 'ඔනි නැ 😮‍💨' },
+      ];
+      const selectedLang = languages[Math.floor(Math.random() * languages.length)];
+
+      const caption = (quotedMessageType === 'imageMessage' && quotedMessage.imageMessage.caption) ||
+                      (quotedMessageType === 'videoMessage' && quotedMessage.videoMessage.caption) || '';
+
+      const buttons = [
+        {
+          name: 'single_select',
+          buttonParamsJson: JSON.stringify({
+            title: selectedLang.text,
+            sections: [
+              {
+                rows: [
+                  { header: '', title: selectedLang.yes, description: 'Save the status', id: 'save_status' },
+                  { header: '', title: selectedLang.no, description: 'Cancel', id: 'cancel_save' },
+                ],
+              },
+            ],
+          }),
+        },
+      ];
+
+      if (caption) {
+        buttons.push({
+          name: 'cta_copy',
+          buttonParamsJson: JSON.stringify({
+            display_text: '𝐂𝐎𝐏𝐘 𝐂𝐀𝐏𝐓𝐈𝐎𝐍 ❏',
+            id: 'copy_caption',
+            copy_code: caption,
+          }),
+        });
+      }
+
+      await withRetry(() =>
+        conn.sendMessage(mek.key.remoteJid, {
+          text: selectedLang.text,
+          footer: '☿ ᴅᴇxᴛᴇʀ - ᴅᴇᴠ ☿',
+          interactiveButtons: buttons,
+        }, { quoted: mek })
+      );
+      return;
+    }
+
+    // Auto-reply logic
+    if (
+      messageText &&
+      !messageText.startsWith('.') &&
+      !mek.key.fromMe &&
+      senderJid !== restrictedNumber &&
+      mek.key.remoteJid !== restrictedNumber
+    ) {
+      for (const rule of replyRules.rules) {
+        let isMatch = false;
+        if (rule.pattern) {
+          try {
+            const regex = new RegExp(rule.pattern, 'i');
+            isMatch = regex.test(messageText);
+          } catch (err) {
+            console.error(`Invalid regex pattern in rule "${rule.trigger}": ${err.message}`);
+            isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
+          }
+        } else {
+          isMatch = rule.trigger && messageText.toLowerCase().includes(rule.trigger.toLowerCase());
+        }
+
+        if (isMatch) {
+          autoReplySent = true;
+          await pool.query(
+            `UPDATE messages SET auto_reply_sent = TRUE WHERE message_id = $1`,
+            [mek.key.id]
+          );
+          for (const response of rule.response) {
+            if (response.delay) {
+              await new Promise(resolve => setTimeout(resolve, response.delay));
+            }
+            const contextInfo = {
+              quotedMessage: mek.message,
+              forwardingScore: 999,
+              isForwarded: true,
+              forwardedNewsletterMessageInfo: {
+                newsletterJid: '120363286758767913@newsletter',
+                newsletterName: 'JOIN CHANNEL 👋',
+                serverMessageId: 143,
+              },
+            };
+            let content = response.content;
+            let caption = response.caption;
+            let url = response.url;
+            if (content) {
+              content = content.replace('${pushname}', pushName).replace('${userid}', userId).replace('${senderdpurl}', senderDpUrl);
+            }
+            if (caption) {
+              caption = caption.replace('${pushname}', pushName).replace('${userid}', userId).replace('${senderdpurl}', senderDpUrl);
+            }
+            if (url) {
+              url = url.replace('${pushname}', pushName).replace('${userid}', userId).replace('${senderdpurl}', senderDpUrl);
+            }
+            switch (response.type) {
+              case 'text':
+                await withRetry(() =>
+                  conn.sendMessage(mek.key.remoteJid, {
+                    text: content,
+                    contextInfo,
+                  }, { quoted: mek })
+                );
+                break;
+              case 'image':
+                const imageBuffer = await fetchMedia(url);
+                if (imageBuffer) {
+                  await withRetry(() =>
+                    conn.sendMessage(mek.key.remoteJid, {
+                      image: imageBuffer,
+                      caption: caption || '',
+                      contextInfo,
+                    }, { quoted: mek })
+                  );
+                }
+                break;
+              case 'video':
+                const videoBuffer = await fetchMedia(url);
+                if (videoBuffer) {
+                  await withRetry(() =>
+                    conn.sendMessage(mek.key.remoteJid, {
+                      video: videoBuffer,
+                      caption: caption || '',
+                      contextInfo,
+                    }, { quoted: mek })
+                  );
+                }
+                break;
+              case 'voice':
+                const voiceBuffer = await fetchMedia(url);
+                if (voiceBuffer) {
+                  await withRetry(() =>
+                    conn.sendMessage(mek.key.remoteJid, {
+                      audio: voiceBuffer,
+                      mimetype: 'audio/mpeg',
+                      ptt: true,
+                      contextInfo,
+                    }, { quoted: mek })
+                  );
+                }
+                break;
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    // Command handling
+    if (messageText && messageText.startsWith('.')) {
+      const [command, ...args] = messageText.split(' ');
+
+      switch (command.toLowerCase()) {
+        case '.ping':
+          const pingTime = performance.now();
+          await withRetry(() =>
+            conn.sendMessage(mek.key.remoteJid, {
+              text: `🏓 Pong! Response time: ${Math.round(performance.now() - pingTime)}ms`,
+            }, { quoted: mek })
+          );
+          break;
+
+        case '.runtime':
+          const runtime = performance.now() - startTime;
+          const seconds = Math.floor(runtime / 1000);
+          const minutes = Math.floor(seconds / 60);
+          const hours = Math.floor(minutes / 60);
+          await withRetry(() =>
+            conn.sendMessage(mek.key.remoteJid, {
+              text: `⏰ Bot Runtime: ${hours}h ${minutes % 60}m ${seconds % 60}s`,
+            }, { quoted: mek })
+          );
+          break;
+
+        case '.reload':
+          if (ownerNumber.includes(senderJid.split('@')[0])) {
+            const result = await reloadJsonFile();
+            await withRetry(() => conn.sendMessage(mek.key.remoteJid, { text: result }, { quoted: mek }));
+          } else {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '🚫 Only owners can use the .reload command.',
+              }, { quoted: mek })
+            );
+          }
+          break;
+
+        case '.delete':
+          if (ownerNumber.includes(senderJid.split('@')[0])) {
+            const clear = args[0]?.toLowerCase() === 'clear';
+            const result = await handleDelete(clear);
+            if (clear && !result.error) {
+              await withRetry(() =>
+                conn.sendMessage(mek.key.remoteJid, {
+                  text: '✅ Database cleared successfully',
+                }, { quoted: mek })
+              );
+            } else if (!clear && result.deletedMessages) {
+              const message = result.deletedMessages.length > 0
+                ? `🗑️ Found ${result.deletedMessages.length} deleted messages with images:\n` +
+                  result.deletedMessages
+                    .map(
+                      m =>
+                        `ID: ${m.message_id}\nSender: ${m.sender_jid}\nImage: ${m.image_url}\nDeleted By: ${m.deleted_by}\nDeleted At: ${m.sri_lanka_time}`
+                    )
+                    .join('\n\n')
+                : '🗑️ No deleted messages with images found.';
+              await withRetry(() => conn.sendMessage(mek.key.remoteJid, { text: message }, { quoted: mek }));
+            } else {
+              await withRetry(() =>
+                conn.sendMessage(mek.key.remoteJid, {
+                  text: '❌ Failed to process delete operation',
+                }, { quoted: mek })
+              );
+            }
+          } else {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '🚫 Only owners can use the .delete command.',
+              }, { quoted: mek })
+            );
+          }
+          break;
+
+        case '.key':
+          if (!mek.message.extendedTextMessage || !mek.message.extendedTextMessage.contextInfo.quotedMessage) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '*Please quote a message to get its key*',
+              }, { quoted: mek })
+            );
+            return;
+          }
+          const quotedKey = {
+            id: mek.message.extendedTextMessage.contextInfo.stanzaId,
+            remoteJid: mek.message.extendedTextMessage.contextInfo.remoteJid || mek.key.remoteJid,
+            participant: mek.message.extendedTextMessage.contextInfo.participant || mek.key.participant,
+          };
+          await withRetry(() =>
+            conn.sendMessage(mek.key.remoteJid, {
+              text: `🔑 *Message Key:*\n\n\`\`\`\n${JSON.stringify(quotedKey, null, 2)}\n\`\`\``,
+            }, { quoted: mek })
+          );
+          break;
+
+        case '.editor':
+          if (!mek.message.extendedTextMessage || !mek.message.extendedTextMessage.contextInfo.quotedMessage) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '*Please quote a message to start the auto-editor*',
+              }, { quoted: mek })
+            );
+            return;
+          }
+          try {
+            const editKey = {
+              id: mek.message.extendedTextMessage.contextInfo.stanzaId,
+              remoteJid: mek.message.extendedTextMessage.contextInfo.remoteJid || mek.key.remoteJid,
+              participant: mek.message.extendedTextMessage.contextInfo.participant || mek.key.participant,
+            };
+
+            const progressStages = [
+              '《 █▒▒▒▒▒▒▒▒▒▒▒》10%',
+              '《 ████▒▒▒▒▒▒▒▒》30%',
+              '《 ███████▒▒▒▒▒》50%',
+              '《 ██████████▒▒》80%',
+              '《 ████████████》100%',
+            ];
+
+            const response = await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `📡 *Processing Report...*\n${progressStages[0]}\n⏳ Time Remaining: 2:00`,
+                contextInfo: {
+                  forwardingScore: 999,
+                  isForwarded: true,
+                },
+              }, { quoted: mek })
+            );
+
+            for (let i = 1; i < progressStages.length; i++) {
+              await new Promise(resolve => setTimeout(resolve, 24000));
+              const remainingSeconds = 120 - i * 24;
+              const minutes = Math.floor(remainingSeconds / 60);
+              const seconds = remainingSeconds % 60;
+              await withRetry(() =>
+                conn.sendMessage(mek.key.remoteJid, {
+                  text: `📡 *Processing Report...*\n${progressStages[i]}\n⏳ Time Remaining: ${minutes}:${seconds.toString().padStart(2, '0')}`,
+                  edit: response.key,
+                })
+              );
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 24000));
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `✅ *𝚁𝙴𝙿𝙾𝚁𝚃 𝚂𝙴𝙽𝙳 𝚃𝙾 𝚃𝙷𝙴 𝙾𝚆𝙽𝙴𝚁 🖥️...*`,
+                edit: response.key,
+              })
+            );
+          } catch (err) {
+            console.error('Editor command error:', err.message);
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `❌ Failed to execute editor: ${err.message}`,
+              }, { quoted: mek })
+            );
+          }
+          break;
+
+        case '.alwaysonline':
+          if (!ownerNumber.includes(senderJid.split('@')[0])) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '🚫 Only owners can use the .alwaysonline command.',
+              }, { quoted: mek })
+            );
+            break;
+          }
+
+          const action = args[0]?.toLowerCase();
+          if (!['on', 'off'].includes(action)) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '⚠️ Usage: .alwaysonline on|off',
+              }, { quoted: mek })
+            );
+            break;
+          }
+
+          try {
+            const enabled = action === 'on';
+            await pool.query(
+              `INSERT INTO always_online_settings (enabled, modified_at, modified_by)
+               VALUES ($1, $2, $3)`,
+              [enabled, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' }), senderJid]
+            );
+
+            if (enabled) {
+              await withRetry(() => conn.sendPresenceUpdate('available', mek.key.remoteJid));
+              console.log('Always online enabled');
+            } else {
+              await withRetry(() => conn.sendPresenceUpdate('unavailable', mek.key.remoteJid));
+              console.log('Always online disabled');
+            }
+
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `✅ Always online ${enabled ? 'enabled' : 'disabled'}`,
+              }, { quoted: mek })
+            );
+          } catch (err) {
+            console.error('Always online command error:', err.message);
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `❌ Failed to toggle always online: ${err.message}`,
+              }, { quoted: mek })
+            );
+          }
+          break;
+
+        case '.recording':
+          if (!ownerNumber.includes(senderJid.split('@')[0])) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '🚫 Only owners can use the .recording command.',
+              }, { quoted: mek })
+            );
+            break;
+          }
+
+          const recordingAction = args[0]?.toLowerCase();
+          const autoStatus = args[1]?.toLowerCase() === 'auto';
+          if (!['on', 'off'].includes(recordingAction)) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '⚠️ Usage: .recording on|off [auto]',
+              }, { quoted: mek })
+            );
+            break;
+          }
+
+          try {
+            const enabled = recordingAction === 'on';
+            await pool.query(
+              `INSERT INTO recording_settings (enabled, auto_status, modified_at, modified_by)
+               VALUES ($1, $2, $3, $4)`,
+              [enabled, autoStatus, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' }), senderJid]
+            );
+
+            if (enabled) {
+              await withRetry(() => conn.sendPresenceUpdate(autoStatus ? 'composing' : 'recording', mek.key.remoteJid));
+              console.log(`Recording presence ${autoStatus ? 'with auto status (composing/recording)' : ''} enabled`);
+            } else {
+              await withRetry(() => conn.sendPresenceUpdate('unavailable', mek.key.remoteJid));
+              console.log('Recording presence disabled');
+            }
+
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `✅ Recording presence ${enabled ? 'enabled' : 'disabled'}${autoStatus ? ' with auto status (composing/recording)' : ''}`,
+              }, { quoted: mek })
+            );
+          } catch (err) {
+            console.error('Recording command error:', err.message);
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `❌ Failed to toggle recording: ${err.message}`,
+              }, { quoted: mek })
+            );
+          }
+          break;
+
+        case '.last':
+          if (!ownerNumber.includes(senderJid.split('@')[0])) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '🚫 Only owners can use the .last command.',
+              }, { quoted: mek })
+            );
+            break;
+          }
+
+          const phoneNumber = args[0]?.replace(/[^0-9]/g, '');
+          if (!phoneNumber || !phoneNumber.match(/^\d{9,12}$/)) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '⚠️ Usage: .last <phone_number> (e.g., .last 94789958225)',
+              }, { quoted: mek })
+            );
+            break;
+          }
+
+          try {
+            const jid = `${phoneNumber}@s.whatsapp.net`;
+            await pool.query(
+              `INSERT INTO number_specific_online (phone_number, enabled, modified_at, modified_by)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (phone_number) DO UPDATE 
+               SET enabled = $2, modified_at = $3, modified_by = $4`,
+              [jid, false, new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' }), senderJid]
+            );
+
+            await withRetry(() => conn.sendPresenceUpdate('unavailable', jid));
+            console.log(`Always online disabled for ${jid}`);
+
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `✅ Always online disabled for ${phoneNumber}`,
+              }, { quoted: mek })
+            );
+          } catch (err) {
+            console.error('Last command error:', err.message);
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `❌ Failed to disable always online for ${phoneNumber}: ${err.message}`,
+              }, { quoted: mek })
+            );
+          }
+          break;
+
+        case '.vcf':
+          if (!ownerNumber.includes(senderJid.split('@')[0])) {
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: '🚫 Only owners can use the .vcf command.',
+              }, { quoted: mek })
+            );
+            break;
+          }
+
+          try {
+            const { rows: contacts } = await pool.query(
+              `SELECT phone_number, display_name FROM friendly_contacts ORDER BY created_at`
+            );
+
+            if (contacts.length === 0) {
+              await withRetry(() =>
+                conn.sendMessage(mek.key.remoteJid, {
+                  text: 'ℹ️ No contacts found in the database.',
+                }, { quoted: mek })
+              );
+              break;
+            }
+
+            let vcfContent = '';
+            contacts.forEach(contact => {
+              vcfContent += `BEGIN:VCARD\n` +
+                            `VERSION:3.0\n` +
+                            `FN:${contact.display_name}\n` +
+                            `TEL;TYPE=CELL:${contact.phone_number}\n` +
+                            `END:VCARD\n`;
+            });
+
+            const vcfFilePath = path.join(tempDir, `contacts_${getRandom()}.vcf`);
+            await fs.writeFile(vcfFilePath, vcfContent);
+
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                document: { url: vcfFilePath },
+                mimetype: 'text/vcard',
+                fileName: 'Friendly_Contacts.vcf',
+                caption: `📋 Generated VCF with ${contacts.length} contacts`,
+              }, { quoted: mek })
+            );
+
+            await fs.unlink(vcfFilePath).catch(err => console.error('VCF file deletion error:', err.message));
+
+            console.log(`Sent VCF file with ${contacts.length} contacts to ${senderJid}`);
+          } catch (err) {
+            console.error('VCF command error:', err.message);
+            await withRetry(() =>
+              conn.sendMessage(mek.key.remoteJid, {
+                text: `❌ Failed to generate VCF: ${err.message}`,
+              }, { quoted: mek })
+            );
+          }
+          break;
+      }
+    }
+  } catch (err) {
+    console.error('Message processing error:', err.message);
+  }
+});
 
     conn.ev.on('messages.update', async (updates) => {
       for (const update of updates) {
