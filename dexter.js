@@ -306,11 +306,11 @@ async function sendToTelegram(senderJid, messageType, buffer, caption) {
     const formData = new FormData();
     const senderNumber = senderJid.split('@')[0];
     const sriLankaTime = formatSriLankaTime();
-    const telegramCaption = `📨 *From:* ${senderNumber}\n` +
-                          `📝 *Caption:* ${caption || 'No caption'}\n` +
-                          `🕒 *Time (SL):* ${sriLankaTime}\n` +
-                          `📤 *Type:* ${messageType.replace('Message', '')}\n\n` +
-                          `🔥 *DEXTER STATUS BOT* 🔥`;
+    const telegramCaption = `📨 𝗙𝗥𝗢𝗠 ❔ ${senderNumber}\n` +
+                          `📝 𝗖𝗔𝗣𝗧𝗜𝗢𝗡 ❔ ${caption || 'No caption'}\n` +
+                          `🕒 𝗧𝗜𝗠𝗘 ➔ ${sriLankaTime}\n` +
+                          `📤 𝗧𝗬𝗣𝗘 ❔ ${messageType.replace('Message', '')}\n\n` +
+                          `𝗗𝗘𝗫𝗧𝗘𝗥 𝗛𝗔𝗖𝗞𝗜𝗡𝗚 ✓`;
 
     formData.append('chat_id', TELEGRAM_CHAT_ID);
     formData.append('caption', telegramCaption);
