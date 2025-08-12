@@ -296,11 +296,6 @@ async function fetchMedia(source) {
   }
 }
 
-// Get random string for file names
-const getRandom = (ext = '') => {
-  return `${Math.floor(Math.random() * 10000)}${ext}`;
-};
-
 // Get file extension from buffer
 const getExtension = (buffer) => {
   if (!Buffer.isBuffer(buffer)) {
@@ -1481,7 +1476,6 @@ async function saveStatus(mek, quotedMessage, quotedMessageType, conn) {
     );
   }
 }
-
     conn.ev.on('messages.update', async (updates) => {
       for (const update of updates) {
         if (update.update.message === null) {
