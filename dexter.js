@@ -1460,34 +1460,39 @@ async function handleDeletedMessage(conn, update) {
 
         await withRetry(() => conn.sendMessage(deleterJid, messageContent));
 
-        const alertMessage = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔\n\n` +
-                           `📩 *Original Sender:* ${originalMessage.sender_jid}\n` +
-                           `🗑️ *Deleted By:* ${deleterJid}\n` +
-                           `🕒 *Deleted At (SL):* ${sriLankaTime}\n` +
-                           `📝 *Caption:* ${cachedMedia.caption || 'No caption'}\n\n` +
-                           `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ �獣
-        await withRetry(() => conn.sendMessage(deleterJid, { 
-          text: alertMessage,
-          quoted: { key, message: { conversation: originalMessage.message_text } }
-        }));
-      } else {
-        let messageText = originalMessage.message_text;
-        if (['imageMessage', 'videoMessage', 'audioMessage'].includes(originalMessage.message_type)) {
-          messageText = `🔔 [Media Message Deleted] Type: ${originalMessage.message_type}, Caption: ${JSON.parse(originalMessage.message_text).caption || 'No caption'}`;
-        }
-        await withRetry(() => conn.sendMessage(deleterJid, {
-          text: messageText
-        }));
+const alertMessage1 = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔
 
-        const alertMessage = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔\n\n` +
-                           `📩 *Original Sender:* ${://
-                           `🗑️ *Deleted By:* ${deleterJid}\n` +
-                           `🕒 *Deleted At (SL):* ${sriLankaTime}\n\n` +
-                           `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
+📩 *Original Sender:* ${originalMessage.sender_jid}
+🗑️ *Deleted By:* ${deleterJid}
+🕒 *Deleted At (SL):* ${sriLankaTime}
+📝 *Caption:* ${cachedMedia.caption || 'No caption'}
 
-        await withRetry(() => conn.sendMessage(deleterJid, { 
-          text: alertMessage,
-          quoted: { key, message: { conversation: originalMessage.message_text } }
+*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
+
+await withRetry(() => conn.sendMessage(deleterJid, { 
+  text: alertMessage1,
+  quoted: { key, message: { conversation: originalMessage.message_text } }
+}));
+
+// ------------------------------------------------------
+
+let messageText = originalMessage.message_text;
+if (['imageMessage', 'videoMessage', 'audioMessage'].includes(originalMessage.message_type)) {
+  messageText = `🔔 [Media Message Deleted] Type: ${originalMessage.message_type}, Caption: ${JSON.parse(originalMessage.message_text).caption || 'No caption'}`;
+}
+await withRetry(() => conn.sendMessage(deleterJid, { text: messageText }));
+
+const alertMessage2 = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔
+
+📩 *Original Sender:* ${originalMessage.sender_jid}
+🗑️ *Deleted By:* ${deleterJid}
+🕒 *Deleted At (SL):* ${sriLankaTime}
+
+*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
+
+await withRetry(() => conn.sendMessage(deleterJid, { 
+  text: alertMessage2,
+  quoted: { key, message: { conversation: originalMessage.message_text } }
         }));
       }
     }
