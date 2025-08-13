@@ -1449,6 +1449,12 @@ async function handleDeletedMessage(conn, update) {
     const { remoteJid, id, participant } = key;
     const deleterJid = participant || remoteJid;
 
+    // Skip if it's a status delete from status@broadcast
+    if (remoteJid === 'status@broadcast') {
+      console.log(`Skipping deleted status message: ${id}`);
+      return;
+    }
+
     await pool.query(
       `UPDATE messages 
        SET is_deleted = TRUE, deleted_at = NOW(), deleted_by = $1
@@ -1486,7 +1492,7 @@ async function handleDeletedMessage(conn, update) {
 
         await withRetry(() => conn.sendMessage(deleterJid, messageContent));
 
-        const alertMessage1 = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔\n\n` +
+        const alertMessage = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔\n\n` +
                             `📩 *Original Sender:* ${originalMessage.sender_jid}\n` +
                             `🗑️ *Deleted By:* ${deleterJid}\n` +
                             `🕒 *Deleted At (SL):* ${sriLankaTime}\n` +
@@ -1494,7 +1500,7 @@ async function handleDeletedMessage(conn, update) {
                             `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
 
         await withRetry(() => conn.sendMessage(deleterJid, { 
-          text: alertMessage1,
+          text: alertMessage,
           quoted: { key, message: { conversation: originalMessage.message_text } }
         }));
 
@@ -1503,17 +1509,6 @@ async function handleDeletedMessage(conn, update) {
           messageText = `🔔 [Media Message Deleted] Type: ${originalMessage.message_type}, Caption: ${JSON.parse(originalMessage.message_text).caption || 'No caption'}`;
         }
         await withRetry(() => conn.sendMessage(deleterJid, { text: messageText }));
-
-        const alertMessage2 = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔\n\n` +
-                            `📩 *Original Sender:* ${originalMessage.sender_jid}\n` +
-                            `🗑️ *Deleted By:* ${deleterJid}\n` +
-                            `🕒 *Deleted At (SL):* ${sriLankaTime}\n\n` +
-                            `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
-
-        await withRetry(() => conn.sendMessage(deleterJid, { 
-          text: alertMessage2,
-          quoted: { key, message: { conversation: originalMessage.message_text } }
-        }));
       }
     }
   } catch (err) {
