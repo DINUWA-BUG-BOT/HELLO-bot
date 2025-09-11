@@ -1,7 +1,7 @@
 module.exports = {
-  DATABASE_URL: "postgresql://bot_whatsapp_g3pd_user:Sip0HTRwgHlGi2lZcqX2fJ0ajLB0e4ut@dpg-d2clk0hr0fns73e28r5g-a.oregon-postgres.render.com/bot_whatsapp_g3pd",
+  DATABASE_URL: "postgresql://bot_whatsapp_edsa_user:w4XyVM0IskSbmWKgdq0A6DzZFLalhpP2@dpg-d2v8dh8gjchc73av8h40-a.oregon-postgres.render.com/bot_whatsapp_edsa",
   PORT: 9090,
-  SESSION_ID: "DEXTER-ID=wL0l1ZQJ#_KDXLLkF51DHqM7MS27xSDfZ_lfyG2fvDB4Zf9tFOpo",
+  SESSION_ID: "DEXTER-ID=jckgATrZ#e63zeBPJHCrVsSjz5mCckhZy1zRdXYOOviOJEYPsaaU",
   OWNER_NUMBER: ["94789958225"], // Add your number here
   READ_MESSAGE: false,
   AUTO_STATUS_SEEN: true,
