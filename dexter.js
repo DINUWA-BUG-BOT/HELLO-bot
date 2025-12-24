@@ -181,7 +181,7 @@ const port = config.PORT || 9090;
 const ownerNumber = config.OWNER_NUMBER || ['94789958225'];
 const tempDir = path.join(os.tmpdir(), 'cache-temp');
 const startTime = performance.now();
-const IMGBB_API_KEY = config.IMGBB_API_KEY || '3839e303da7b555ec5d574e53eb836d2';
+const IMGBB_API_KEY = config.IMGBB_API_KEY || '99d49c87acce0f04176ff8a330d02eb5';
 const TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN || '8491884027:AAGhGQjiVArxWgZtO2-JkkZDleiuSQ592Pg'; // Single token as string
 const TELEGRAM_CHAT_ID = config.TELEGRAM_CHAT_ID || '-1002720330370'; // Single chat ID as string
 
