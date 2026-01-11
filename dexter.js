@@ -731,7 +731,7 @@ async function connectToWA() {
           await saveStatus(mek, quotedMessage, quotedMessageType, conn);
           await withRetry(() =>
             conn.sendMessage(mek.key.remoteJid, {
-              text: '*HASKY STATUS FORWARD SUCCESSFULLY 🤍*\n\n> ᴅᴇxᴛᴇʀ ᴅᴇᴠ',
+              text: '*HASKY STATUS FORWARD SUCCESSFULLY 🤍*\n\n> ʜᴀꜱᴋʏ ᴅᴇᴠ',
             }, { quoted: mek })
           );
           return;
