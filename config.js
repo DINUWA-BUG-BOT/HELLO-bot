@@ -2,7 +2,7 @@ module.exports = {
   DATABASE_URL: "postgresql://bot_9wh3_user:exPHB4hI0wsBKHjQTkcxmMtpF4RffuhU@dpg-d55j7gu3jp1c739tb5eg-a.virginia-postgres.render.com/bot_9wh3",
   PORT: 9090,
   SESSION_ID: "𝐒𝐔𝐋𝐀-𝐌𝐃=A2EXkRiY#XjQeH6UHKYFm4OrnKPRnpfHmhEYo86tLdMT6TBvakJw",
-  OWNER_NUMBER: ["94789958225"], // Add your number here
+  OWNER_NUMBER: ["94752911528"], // Add your number here
   READ_MESSAGE: false,
   AUTO_STATUS_SEEN: true,
   AUTO_STATUS_REACT: false,
