@@ -154,7 +154,7 @@ async function downloadSessionFile() {
       console.error('Please add your session to SESSION_ID env variable!');
       process.exit(1);
     }
-    const sessdata = config.SESSION_ID.replace('𝙰𝚂𝙸𝚃𝙷𝙰-𝙼𝙳=', '');
+    const sessdata = config.SESSION_ID.replace('𝐒𝐔𝐋𝐀-𝐌𝐃=', '');
     const file = File.fromURL(`https://mega.nz/file/${sessdata}`);
     await withRetry(() => new Promise((resolve, reject) => {
       file.download((err, data) => {
