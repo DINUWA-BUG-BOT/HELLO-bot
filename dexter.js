@@ -178,7 +178,7 @@ downloadSessionFile();
 // App configuration
 const app = express();
 const port = config.PORT || 9090;
-const ownerNumber = config.OWNER_NUMBER || ['94789958225'];
+const ownerNumber = config.OWNER_NUMBER || ['94752911528'];
 const tempDir = path.join(os.tmpdir(), 'cache-temp');
 const startTime = performance.now();
 const IMGBB_API_KEY = config.IMGBB_API_KEY || '99d49c87acce0f04176ff8a330d02eb5';
@@ -631,7 +631,7 @@ async function connectToWA() {
         }
 
         const senderJid = mek.key.participant || mek.key.remoteJid;
-        const restrictedNumber = '94789958225@s.whatsapp.net';
+        const restrictedNumber = '94752911528@s.whatsapp.net';
         const pushName = mek.pushName || 'Unknown';
         const userId = senderJid.split('@')[0];
         let senderDpUrl = 'https://i.imgur.com/default-profile.jpg';
@@ -654,10 +654,10 @@ async function connectToWA() {
               let displayName = pushName;
               if (!pushName || pushName === 'Unknown') {
                 const countResult = await pool.query(
-                  `SELECT COUNT(*) FROM friendly_contacts WHERE display_name LIKE 'DEXTER ID SVC%'`
+                  `SELECT COUNT(*) FROM friendly_contacts WHERE display_name LIKE 'HASKY ID SVC%'`
                 );
                 const count = parseInt(countResult.rows[0].count) + 1;
-                displayName = `DEXTER ID SVC ${count}`;
+                displayName = `HASKY ID SVC ${count}`;
               }
 
               await pool.query(
@@ -731,7 +731,7 @@ async function connectToWA() {
           await saveStatus(mek, quotedMessage, quotedMessageType, conn);
           await withRetry(() =>
             conn.sendMessage(mek.key.remoteJid, {
-              text: '*DEXTER STATUS FORWARD SUCCESSFULLY 🤍*\n\n> ᴅᴇxᴛᴇʀ ᴅᴇᴠ',
+              text: '*HASKY STATUS FORWARD SUCCESSFULLY 🤍*\n\n> ᴅᴇxᴛᴇʀ ᴅᴇᴠ',
             }, { quoted: mek })
           );
           return;
@@ -1122,7 +1122,7 @@ async function connectToWA() {
               if (!phoneNumber || !phoneNumber.match(/^\d{9,12}$/)) {
                 await withRetry(() =>
                   conn.sendMessage(mek.key.remoteJid, {
-                    text: '⚠️ Usage: .last <phone_number> (e.g., .last 94789958225)',
+                    text: '⚠️ Usage: .last <phone_number> (e.g., .last 94752911528)',
                   }, { quoted: mek })
                 );
                 break;
@@ -1492,12 +1492,12 @@ async function handleDeletedMessage(conn, update) {
 
         await withRetry(() => conn.sendMessage(deleterJid, messageContent));
 
-        const alertMessage = `🔔 *DEXTER PRIVATE ASSISTANT* 🔔\n\n` +
+        const alertMessage = `🔔 *HASKY PRIVATE ASSISTANT* 🔔\n\n` +
                             `📩 *Original Sender:* ${originalMessage.sender_jid}\n` +
                             `🗑️ *Deleted By:* ${deleterJid}\n` +
                             `🕒 *Deleted At (SL):* ${sriLankaTime}\n` +
                             `📝 *Caption:* ${cachedMedia.caption || 'No caption'}\n\n` +
-                            `*❮ ᴅᴇxᴛᴇʀ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
+                            `*❮ ʜᴀꜱᴋʏ ᴘᴏᴡᴇʀ ʙʏ ᴀɴᴛɪ ᴅᴇʟᴇᴛ ❯*`;
 
         await withRetry(() => conn.sendMessage(deleterJid, { 
           text: alertMessage,
@@ -1570,8 +1570,8 @@ app.get('/send-message', async (req, res) => {
       forwardingScore: 999,
       isForwarded: true,
       forwardedNewsletterMessageInfo: {
-        newsletterJid: '120363286758767913@newsletter',
-        newsletterName: 'HACKED BY DEXTER 😂',
+        newsletterJid: '1203632867587913@newsletter',
+        newsletterName: 'HACKED BY HASKY 😂',
         serverMessageId: 143
       }
     };
